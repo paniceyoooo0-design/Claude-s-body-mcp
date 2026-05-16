@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include <M5Unified.h>
+#include <M5StackChan.h>
 #include <WiFi.h>
 #include "http_server.h"
 #include "types.h"
@@ -20,11 +21,7 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    auto cfg = M5.config();
-    cfg.serial_baudrate = 115200;
-    cfg.internal_mic    = true;
-    cfg.internal_spk    = true;
-    M5.begin(cfg);
+    M5StackChan.begin();
     M5.Display.setBrightness(DISPLAY_BRIGHTNESS);
 
     initFace();
@@ -59,7 +56,7 @@ void setup() {
 #endif
 }
 void loop() {
-    M5.update();
+    M5StackChan.update();
     handleHttpServer();
 
     if (WiFi.status() != WL_CONNECTED) {

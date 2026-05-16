@@ -12,11 +12,9 @@ Usage:
   python server.py --http --port 8001  # HTTP mode (for Claude Chat/Cowork)
 """
 
-import asyncio
-import base64
 import os
 import subprocess
-import tempfile
+import sys as _sys
 import threading
 import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -228,21 +226,17 @@ def transcribe_audio(wav_path: Path, lang: str = "zh") -> dict:
 
 # ── MCP Server ────────────────────────────────────────────
 # Parse args early so we can configure FastMCP constructor
-import sys as _sys
 _http_mode = "--http" in _sys.argv
 _mcp_port = 8002
 for _i, _arg in enumerate(_sys.argv):
     if _arg == "--port" and _i + 1 < len(_sys.argv):
         _mcp_port = int(_sys.argv[_i + 1])
 
-if _http_mode:
-    mcp = FastMCP(
-        "stackchan",
-        host="0.0.0.0",
-        port=_mcp_port,
-    )
-else:
-    mcp = FastMCP("stackchan")
+mcp = (
+    FastMCP("stackchan", host="0.0.0.0", port=_mcp_port)
+    if _http_mode
+    else FastMCP("stackchan")
+)
 
 
 @mcp.tool()

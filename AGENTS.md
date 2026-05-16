@@ -57,6 +57,33 @@ pio run -t uploadfs
 The expected serial device on this Mac is commonly `/dev/cu.usbmodem101`, but
 verify it before upload because the port can change.
 
+## Quality Checks
+
+Use the project-root `Makefile` as the default quality gate:
+
+```sh
+make lint
+make test
+```
+
+- `make lint` runs Python `ruff` plus firmware `pio check`.
+- `make test` runs Python `pytest` plus a firmware `pio run` build.
+- `make test-mcp` runs only the MCP server unit tests.
+
+Run the smallest useful check while iterating, then run the broader gate before
+handing off changes:
+
+- Python or MCP server changes: `uv run ruff check .` and `uv run pytest`.
+- MCP server behavior changes: also run `make test-mcp`.
+- Firmware changes: run `cd firmware && pio run`.
+- Firmware safety/lint checks: run
+  `cd firmware && pio check --severity=high --fail-on-defect=high`.
+- Cross-boundary HTTP contract changes: update firmware, MCP server callers,
+  tests, and docs together.
+
+MCP tests are written to avoid live-device side effects. They mock the MCP
+package and must not call Stack-chan HTTP endpoints or consume `GET /audio`.
+
 ## MCP Server Notes
 
 `mcp-server/server.py` provides tools for speaking, listening, moving the head,
@@ -103,11 +130,23 @@ recording.
 - For face assets, keep filenames and SPIFFS paths aligned between
   `firmware/data/` and `firmware/src/face_service.cpp`.
 
+## Troubleshooting Documentation
+
+- Record non-trivial debugging sessions under `docs/`.
+- Use this filename pattern: `docs/<topic>-troubleshooting-YYYY-MM-DD.md`.
+- Include the symptoms, investigation steps, false leads, root cause or current
+  best hypothesis, final fix, verification commands/results, and references.
+- Prefer concrete artifacts over vague notes: HTTP responses, serial log
+  excerpts, build errors, image-diff numbers, firmware versions, and source
+  links.
+- If the issue changes established project behavior, update
+  `docs/development-guide.md` as well so the general guide stays current.
+
 
 <claude-mem-context>
 # Memory Context
 
-# [stackchan] recent context, 2026-05-16 8:29pm GMT+9
+# [stackchan] recent context, 2026-05-16 8:56pm GMT+9
 
 No previous sessions found.
 </claude-mem-context>

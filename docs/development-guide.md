@@ -78,6 +78,58 @@ The current PlatformIO environment is `m5stack-cores3`:
 The serial device on this Mac is often `/dev/cu.usbmodem101`, but verify it
 before upload because it can change.
 
+## Quality Checks
+
+The repository has a small shared quality-check entrypoint at the project root:
+
+```sh
+make lint
+make test
+```
+
+Python host tooling uses `ruff` and `pytest` through `uv`:
+
+```sh
+uv run ruff check .
+uv run pytest
+```
+
+MCP server tests are isolated from the live device and mock the MCP package at
+import time, so they are safe to run without consuming `/audio` or calling the
+Stack-chan HTTP API:
+
+```sh
+make test-mcp
+```
+
+Firmware linting uses PlatformIO's `cppcheck` integration:
+
+```sh
+cd firmware
+pio check --severity=high --fail-on-defect=high
+```
+
+`make test` also builds the firmware with `pio run`, which is the practical
+regression check for the Arduino/CoreS3 side of this project.
+
+Use this matrix when choosing what to run:
+
+| Change type | Minimum check | Broader handoff check |
+| --- | --- | --- |
+| Python or MCP server only | `uv run ruff check .` and `uv run pytest` | `make lint` |
+| MCP tool behavior or guardrails | `make test-mcp` | `make lint` and `make test` |
+| Firmware only | `cd firmware && pio run` | `make lint` and `make test` |
+| HTTP contract shared by firmware and MCP | `uv run pytest` and `cd firmware && pio run` | `make lint` and `make test` |
+| Face assets under `firmware/data/` | `cd firmware && pio run -t uploadfs` before device use | Document any filename/path changes |
+
+The Python tooling is declared in `pyproject.toml`, locked by `uv.lock`, and
+can also be installed with `requirements-dev.txt` for environments that do not
+use `uv`.
+
+`pio check` is intentionally configured as a high-severity gate. Cppcheck emits
+medium/low warnings from bundled libraries and legacy SCServo driver code, so
+the day-to-day lint target focuses on defects that should block handoff.
+
 ## Local Configuration
 
 Create local firmware configuration from the example:
@@ -226,6 +278,20 @@ Or use:
 `start-http.sh` starts the MCP server on port `8002`, starts `cloudflared tunnel
 run` if needed, and checks the public MCP endpoint.
 
+Run the MCP-only regression tests without a device:
+
+```sh
+make test-mcp
+```
+
+These tests verify the exported tool names and device-facing guardrails such as
+servo input clamping, face validation, audio URL generation, and avoiding
+`GET /audio` when `/audio/status` is not ready.
+
+When adding MCP tools or changing arguments, update `tests/test_mcp_server.py`
+with import-safe tests. Tests should mock network/device calls and must avoid
+calling live Stack-chan endpoints.
+
 ## Face Assets
 
 Face PNG paths are hard-coded in `firmware/src/face_service.cpp` and must match
@@ -251,24 +317,28 @@ from memory for faster switching.
 
 ## Servo Notes
 
-The servo service uses SCServo over UART1:
+The servo service uses the official `m5stack/StackChan-BSP` library instead of
+directly driving SCServo from application code. This matters because the
+official StackChan hardware requires BSP initialization for board-level support,
+including servo power enable through the IO expander.
 
-- UART: `UART_NUM_1`
-- Baud: `1000000`
-- TX pin: `6`
-- RX pin: `7`
-- Yaw servo ID: `1`
-- Pitch servo ID: `2`
-
-Command inputs are degrees:
+Application commands are still exposed as degrees:
 
 - Yaw `x`: `-128` to `128`
-- Pitch `y`: `0` to `90`
-- Speed: `0` to `100`
+- Pitch `y`: clamped to `5` to `85` to avoid the extreme vertical range
+- Speed: `0` to `100`, mapped to the BSP `0` to `1000` range
 
-Servo position conversion uses local calibration constants in
-`firmware/src/servo_service.cpp`. Check `/servo/status` when debugging movement
-or acknowledgements.
+The firmware converts API values to BSP motion units, where `10` equals
+`1 degree`, then calls `M5StackChan.Motion`.
+
+Key references:
+
+- `firmware/src/main.cpp`: calls `M5StackChan.begin()` and
+  `M5StackChan.update()`.
+- `firmware/src/servo_service.cpp`: wraps `M5StackChan.Motion.move()`,
+  `goHome()`, `moveX()`, and `moveY()`.
+- `docs/servo-troubleshooting-2026-05-16.md`: record of the servo failure
+  investigation and BSP migration.
 
 ## Camera Notes
 
@@ -287,3 +357,28 @@ camera SCCB pins share GPIO 11 and 12.
 - Do not commit local secrets or Wi-Fi settings from `firmware/src/config.h`.
 - Use `firmware/config.h.example` for documented defaults.
 - Before live-device tests, prefer non-destructive status endpoints.
+
+## Troubleshooting Records
+
+Keep durable records of non-trivial debugging sessions under `docs/` so later
+work can start from evidence instead of memory.
+
+Use this filename pattern:
+
+```text
+docs/<topic>-troubleshooting-YYYY-MM-DD.md
+```
+
+Each troubleshooting record should include:
+
+- Symptoms and user-visible behavior.
+- Reproduction or verification commands.
+- Investigation steps, including false leads that were ruled out.
+- Root cause, or the current best hypothesis if the issue is not fully solved.
+- Final fix or workaround.
+- Concrete verification results, such as HTTP responses, serial logs, build
+  output, screenshots, image-diff numbers, or measured values.
+- Links to relevant upstream documentation, source repositories, or local files.
+
+When a troubleshooting session changes normal development practice, update this
+guide in the relevant section and link to the detailed troubleshooting record.
