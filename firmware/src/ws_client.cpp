@@ -14,6 +14,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
+#include <M5Unified.h>   // for M5.Power.* in handleStatus
 
 // We use the standard links2004/WebSockets library — it speaks wss:// over
 // the Arduino-WiFi TCP stack and handles TLS via the platform's BearSSL/
@@ -127,6 +128,20 @@ static void handleStatus(uint32_t id) {
     doc["servo_ready"] = isServoReady();
     doc["face"] = getCurrentFaceName();
     doc["wifi_rssi"] = WiFi.RSSI();
+
+    // Battery info from AXP2101 via M5Unified. The CoreS3's small LiPo runs
+    // ~1-2h continuous; this lets the LLM warn Panice before stackchan dies
+    // mid-conversation, and lets us debug "won't run on battery" issues.
+    // M5.Power.getBatteryLevel() returns 0-100 (% SoC), -1 if not supported.
+    // M5.Power.getBatteryVoltage() returns mV.
+    // M5.Power.isCharging() returns 0=discharging, 1=charging, -1=unknown.
+    int batt_pct = M5.Power.getBatteryLevel();
+    int batt_mv  = M5.Power.getBatteryVoltage();
+    auto charge_state = M5.Power.isCharging();
+    doc["battery_pct"] = batt_pct;
+    doc["battery_v"]   = batt_mv / 1000.0;
+    doc["charging"]    = (charge_state == m5::Power_Class::is_charging);
+
     JsonDocument reply;
     reply["id"] = id;
     reply["ok"] = true;
