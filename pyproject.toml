@@ -8,6 +8,7 @@ dependencies = [
     "requests>=2.31",
     "websockets>=13",
     "aiohttp>=3.10",
+    "pyjwt>=2.12.1",
 ]
 
 [dependency-groups]

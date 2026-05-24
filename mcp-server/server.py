@@ -476,6 +476,8 @@ def main() -> None:
         from starlette.applications import Starlette
         from starlette.routing import Mount
 
+        import oauth  # local module — OAuth 2.1 endpoints for claude.ai mobile
+
         port = int(os.environ.get("MCP_PORT", 8767))
 
         @asynccontextmanager
@@ -492,43 +494,74 @@ def main() -> None:
                     )
                     yield
 
-        # Bearer auth for the MCP transport. Distinct from STACKCHAN_TOKEN
-        # (device auth) so a leak of one doesn't compromise the other —
-        # same separation the old body-mcp gateway used. Raw ASGI rather
-        # than BaseHTTPMiddleware to avoid buffering bugs on streaming
-        # responses (the streamable-http transport pushes JSON-RPC chunks
-        # for long-running tool calls; buffering them would stall the
-        # client until the call completes).
+        # Bearer auth for /mcp. Accepts either:
+        #   (1) static MCP_TOKEN bearer — for explicit configs (Desktop's
+        #       mcp-remote, Code's ~/.claude.json). The legacy path.
+        #   (2) OAuth-issued JWT — for claude.ai mobile app via Integrations.
+        #       The JWT is verified statelessly (HS256 + OAUTH_JWT_SECRET).
+        #
+        # /oauth/* and /.well-known/* are PUBLIC (clients can't reach them
+        # otherwise — chicken/egg). Everything else under /mcp goes through
+        # bearer.
+        #
+        # Raw ASGI rather than BaseHTTPMiddleware: streamable-http chunks
+        # responses for long tool calls; BaseHTTPMiddleware buffers them
+        # and stalls the client until the call completes. Already debugged
+        # this once during initial deploy.
+        OAUTH_EXEMPT_PREFIXES = (b"/oauth/", b"/.well-known/")
+
         def bearer_middleware(asgi_app):
             async def middleware(scope, receive, send):
-                if scope["type"] == "http":
-                    expected = os.environ.get("MCP_TOKEN", "")
-                    if expected:
-                        headers = dict(scope.get("headers", []))
-                        got = headers.get(b"authorization", b"").decode("latin-1", "replace")
-                        if got != f"Bearer {expected}":
-                            await send({
-                                "type": "http.response.start",
-                                "status": 401,
-                                "headers": [(b"content-type", b"application/json")],
-                            })
-                            await send({
-                                "type": "http.response.body",
-                                "body": b'{"error":"Unauthorized"}',
-                            })
-                            return
+                if scope["type"] != "http":
+                    await asgi_app(scope, receive, send)
+                    return
+                path = scope.get("path", "").encode("latin-1", "replace")
+                # Exempt OAuth discovery + endpoints from auth.
+                if any(path.startswith(p) for p in OAUTH_EXEMPT_PREFIXES):
+                    await asgi_app(scope, receive, send)
+                    return
+                static_expected = os.environ.get("MCP_TOKEN", "")
+                headers = dict(scope.get("headers", []))
+                got = headers.get(b"authorization", b"").decode("latin-1", "replace")
+                bearer = got[len("Bearer "):] if got.startswith("Bearer ") else ""
+                authorized = False
+                if static_expected and bearer == static_expected:
+                    authorized = True
+                elif bearer and oauth.verify_access_token(bearer):
+                    authorized = True
+
+                if not authorized:
+                    # Per MCP auth spec, WWW-Authenticate points clients at
+                    # the protected-resource metadata so they can discover
+                    # the auth server and start the OAuth flow.
+                    iss = os.environ.get("PUBLIC_BASE_URL", "https://body.aerogelovepanice.com").rstrip("/")
+                    metadata_url = f"{iss}/.well-known/oauth-protected-resource"
+                    www_auth = f'Bearer resource_metadata="{metadata_url}"'.encode("latin-1")
+                    await send({
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"www-authenticate", www_auth),
+                        ],
+                    })
+                    await send({
+                        "type": "http.response.body",
+                        "body": b'{"error":"Unauthorized"}',
+                    })
+                    return
                 await asgi_app(scope, receive, send)
             return middleware
 
         inner = Starlette(
-            routes=[Mount("/", app=mcp.streamable_http_app())],
+            routes=oauth.routes() + [Mount("/", app=mcp.streamable_http_app())],
             lifespan=combined_lifespan,
         )
         app = bearer_middleware(inner)
-        if not os.environ.get("MCP_TOKEN"):
+        if not os.environ.get("MCP_TOKEN") and not os.environ.get("OAUTH_JWT_SECRET"):
             logger.warning(
-                "MCP_TOKEN not set — MCP endpoint is OPEN. Set it in .env "
-                "before exposing on public internet."
+                "MCP_TOKEN and OAUTH_JWT_SECRET both unset — MCP endpoint is "
+                "effectively OPEN. Set at least one in .env before exposing."
             )
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     else:

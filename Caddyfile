@@ -42,6 +42,17 @@ body.aerogelovepanice.com {
     # only matches /mcp + at least one character. Caddy then routes /mcp to
     # the fallback handler, which returns its own response instead of
     # proxying. Listing /mcp and /mcp/* explicitly covers both forms.
+    # OAuth 2.1 endpoints — claude.ai mobile/web discovers + flows through
+    # these to mint a JWT bearer. Same upstream port as /mcp (FastMCP + OAuth
+    # share the Starlette app). Same Host-rewrite quirk applies — uvicorn
+    # would 421 on the public FQDN.
+    @oauth_paths path /.well-known/oauth-* /oauth/*
+    handle @oauth_paths {
+        reverse_proxy 127.0.0.1:8767 {
+            header_up Host {upstream_hostport}
+        }
+    }
+
     @mcp_paths path /mcp /mcp/*
     handle @mcp_paths {
         reverse_proxy 127.0.0.1:8767 {
