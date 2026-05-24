@@ -87,16 +87,12 @@ async def _lifespan(_server):
 mcp = FastMCP(
     "stackchan",
     lifespan=_lifespan,
-    # json_response=True: tool responses come back as plain JSON on the POST
-    # request, instead of FastMCP's default text/event-stream stream that
-    # waits for a paired GET /mcp connection. Stream mode times out for us
-    # behind Caddy because the GET-side state machine is fragile; plain JSON
-    # is what every standard RPC client expects anyway.
+    # json_response=True makes the POST /mcp response come back as plain
+    # JSON-RPC instead of FastMCP's default SSE stream. The default mode
+    # paired-streams responses on a GET connection, which times out behind
+    # Caddy because the GET-side machinery is fragile in reverse-proxy
+    # setups. JSON-response is what every short-lived tool call needs.
     json_response=True,
-    # stateless_http=True: no per-session state on the server. Each POST is
-    # independent — no resumable streams, no session id reuse. Fine for our
-    # tool-call workload (each tool returns synchronously in seconds).
-    stateless_http=True,
 )
 
 
