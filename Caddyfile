@@ -36,7 +36,14 @@ body.aerogelovepanice.com {
     # path `/mcp` by default — do NOT strip the prefix or the upstream
     # router 404s. (This bit me on first deploy; leaving the comment as a
     # tripwire for anyone tempted to "clean up" with handle_path.)
-    handle /mcp* {
+    #
+    # Why a named matcher with explicit alternatives instead of `handle /mcp*`:
+    # the latter doesn't match the bare `/mcp` path (no trailing slash) — it
+    # only matches /mcp + at least one character. Caddy then routes /mcp to
+    # the fallback handler, which returns its own response instead of
+    # proxying. Listing /mcp and /mcp/* explicitly covers both forms.
+    @mcp_paths path /mcp /mcp/*
+    handle @mcp_paths {
         reverse_proxy 127.0.0.1:8767
     }
 
