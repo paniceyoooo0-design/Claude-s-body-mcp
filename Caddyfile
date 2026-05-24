@@ -44,7 +44,17 @@ body.aerogelovepanice.com {
     # proxying. Listing /mcp and /mcp/* explicitly covers both forms.
     @mcp_paths path /mcp /mcp/*
     handle @mcp_paths {
-        reverse_proxy 127.0.0.1:8767
+        reverse_proxy 127.0.0.1:8767 {
+            # Uvicorn rejects requests whose Host header doesn't match what
+            # it thinks it's serving — 421 "Invalid Host header". Caddy
+            # passes Host through unchanged by default, which is the public
+            # FQDN; uvicorn doesn't recognize it. Rewrite to the upstream's
+            # host:port so uvicorn sees a Host it considers its own.
+            # aiohttp (used by media_server for /audio + /upload) doesn't
+            # have this guard, which is why those paths work without this
+            # workaround.
+            header_up Host {upstream_hostport}
+        }
     }
 
     # Everything else: 404 (no public root page on purpose).
