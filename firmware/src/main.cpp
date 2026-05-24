@@ -1,21 +1,26 @@
+// main.cpp — Claude's body MCP firmware entry.
+//
+// First-version scope (2026-05-24): WiFi → WS-outbound to wss://body/ws →
+// receive control commands (play / move / nod / shake / home / face /
+// status). NOT yet: mic / camera / LED — those need their respective
+// services refactored from the original HTTP-buffer model to the new
+// upload+event model. Tracked in [[project_stackchan_mcp]] firmware notes.
+
 #include <Arduino.h>
 
 #include <M5Unified.h>
 #include <M5StackChan.h>
 #include <WiFi.h>
-#include "http_server.h"
+
 #include "types.h"
 #include "config.h"
 #include "globals.h"
 #include "queue_manager.h"
-#include "mic_service.h"
 #include "wifi_manager.h"
-#include "notification_service.h"
 #include "playback_service.h"
-#include "chat_service.h"
 #include "face_service.h"
 #include "servo_service.h"
-#include "camera_service.h"
+#include "ws_client.h"
 
 void setup() {
     Serial.begin(115200);
@@ -24,52 +29,45 @@ void setup() {
     M5StackChan.begin();
     M5.Display.setBrightness(DISPLAY_BRIGHTNESS);
 
-    initFace();
+    initFace();   // now drives m5stack-avatar instead of PNG SPIFFS
 
-    Serial.println("\n=== Yuno v5.0 (Microphone) ===");
+    Serial.println("\n=== Claude's body MCP firmware v1 (WS-outbound) ===");
 
     auto spk_cfg = M5.Speaker.config();
     M5.Speaker.config(spk_cfg);
     M5.Speaker.setVolume(SPEAKER_VOLUME);
 
-    if (!initMicrophone()) {
-        Serial.println("[ERROR] Microphone initialization failed!");
-    }
-
     if (!initServo()) {
         Serial.println("[WARN] Servo init failed - head movement disabled");
     }
 
-    if (!initCamera()) {
-        Serial.println("[WARN] Camera init failed - vision disabled");
-    }
-
     connectWiFi();
-    syncServerHour();
-    checkAndEnqueueNotification();
-    initPlayback();
-    initHttpServer();
-
-#ifdef TEST_MODE
-    delay(3000);
-    testChat("おはよう！");
-#endif
+    // syncServerHour was an old API endpoint on the LAN server; v1 firmware
+    // doesn't have a per-network server to ask, so serverHour stays at -1
+    // (default-calm face during day, no auto-sleepy at night). The gateway
+    // can drive the sleepy face explicitly via stackchan_face("sleepy").
+    initPlayback();            // audio queue + downloader
+    initWsClient();            // start outbound WS to gateway
 }
+
 void loop() {
     M5StackChan.update();
-    handleHttpServer();
+    handleWsClient();          // WS state machine + reconnect
 
+    // Cheap-ish but periodic WiFi watchdog. The WS library reconnects when
+    // its TCP socket drops, but if WiFi itself goes away we need to nudge it.
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[WIFI] Disconnected. Reconnecting...");
         WiFi.reconnect();
         delay(5000);
     }
 
+    // Audio playback pipeline (queue → download → speaker).
     checkPendingPlayback();
-    updateLipSync();
-    updateMicrophone();
+    updateLipSync();           // amplitude-driven mouth animation
 
-        // 再生完了検知（マイク再開より後に置く）
+    // Playback finish detection — same logic as original firmware, lifted
+    // verbatim except we no longer call the old HTTP server completion hook.
     if (isPlaying &&
         (millis() - playbackStartMs > 1000) &&
         (!M5.Speaker.isPlaying() ||
@@ -79,24 +77,6 @@ void loop() {
             M5.Speaker.stop();
         }
         notifyPlaybackFinished();
-    }
-
-    // マイク再開（完了検知より前に置く）
-    if (micResumeRequested && !isPlaying) {
-        micResumeRequested = false;
-        if (!M5.Mic.isRunning()) {
-            if (initMicrophone()) {
-                Serial.println("[MIC] Mic resumed after playback");
-            } else {
-                Serial.println("[MIC] Mic resume failed");
-            }
-        }
-    }
-
-    static unsigned long lastCheck = 0;
-    if (millis() - lastCheck > NOTIFICATION_CHECK_INTERVAL) {
-        checkAndEnqueueNotification();
-        lastCheck = millis();
     }
 
     delay(50);

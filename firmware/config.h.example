@@ -1,24 +1,43 @@
-// config.h.example
+// config.h.example — copy to src/config.h and fill in.
+// src/config.h is gitignored so secrets stay local.
 
 #ifndef CONFIG_H
 #define CONFIG_H
-// ネットワーク設定（接続優先順）
+
+// ── Gateway (cloud) ─────────────────────────────────────────────────────
+// The wss:// URL the device opens an outbound connection to. Caddy on the
+// VPS reverse-proxies this to the gateway container's port 8765.
+#define WSS_URL          "wss://body.aerogelovepanice.com/ws"
+
+// Bearer token expected by the gateway. Must match STACKCHAN_TOKEN in the
+// gateway's /opt/Claude-s-body-mcp/.env. Get the current value with:
+//   ssh root@67.230.181.159 'grep ^STACKCHAN_TOKEN /opt/Claude-s-body-mcp/.env | cut -d= -f2-'
+#define STACKCHAN_TOKEN  "PASTE_64_HEX_CHARS_HERE"
+
+// ── WiFi (failover list) ────────────────────────────────────────────────
+// The device tries each network in order; first one that succeeds wins.
+// WIFI_NETWORK_COUNT must match the number of populated slots below.
 #define WIFI_NETWORK_COUNT 2
 
-// WiFi設定
-// 0: 自宅
-#define WIFI_SSID_0       "your-ssid"
-#define WIFI_PASSWORD_0   "your-password"
-#define SERVER_URL_0    "http://192.168.1.**:5050"
-// 1: スマホホットスポット → スマホアプリ
-#define WIFI_SSID_1     "YunoHotspot"      
-#define WIFI_PASSWORD_1 "your_hotspot_pass" 
-#define SERVER_URL_1    "http://172.20.10.*:500"
+#define WIFI_SSID_0      "YourHomeWiFi"
+#define WIFI_PASSWORD_0  "your-home-wifi-password"
+// SERVER_URL_0 was used by the old HTTP-based firmware (per-network LAN
+// gateway URL). The new firmware ignores it (gateway is reached via
+// WSS_URL above regardless of which WiFi the device is on) — kept defined
+// just so wifi_manager.cpp compiles unchanged.
+#define SERVER_URL_0     ""
 
-// スピーカー設定
-#define SPEAKER_VOLUME  200
+#define WIFI_SSID_1      "PhoneHotspot"
+#define WIFI_PASSWORD_1  "hotspot-password"
+#define SERVER_URL_1     ""
 
-// マイク設定
+// ── Speaker / display ───────────────────────────────────────────────────
+#define SPEAKER_VOLUME   200    // 0..255
+#define DISPLAY_BRIGHTNESS 70   // 0..255
+
+// ── Microphone (currently unused — v1 firmware doesn't expose the mic) ──
+// Kept for compatibility with mic_service.cpp constants. v2 firmware will
+// wire these into the new upload+event flow.
 #define MIC_SAMPLE_RATE           16000
 #define MIC_MAX_RECORD_SECONDS    8
 #define MIC_TRIGGER_RMS           0.0095f
@@ -29,8 +48,7 @@
 #define MIC_MIN_VALID_SAMPLES     5200
 #define MIC_VOICE_CONFIRM_RMS     0.004f
 #define PRE_TRIGGER_BUFFER_SAMPLES 4800
-
-// ディスプレイ
-#define DISPLAY_BRIGHTNESS  70
+#define MIC_MAGNIFICATION         8
+#define MIC_NOISE_FILTER_LEVEL    0
 
 #endif
