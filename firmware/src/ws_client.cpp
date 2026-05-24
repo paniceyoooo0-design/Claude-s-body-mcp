@@ -187,8 +187,16 @@ static void onMessage(const char* payload, size_t length) {
         clearLeds();
         sendAckSimple(id);
     }
-    else if (method == "listen" || method == "snapshot") sendNack(id, "not implemented in v1");
-    else                                                  sendNack(id, String("unknown method: ") + method);
+    else if (method == "listen") {
+        // VAD is always running — the device auto-uploads on voice and emits
+        // audio_ready. `listen` is mostly an acknowledge-and-wait signal from
+        // the LLM; we just ack so the gateway tool can subscribe to the next
+        // audio_ready event with its timeout.
+        setFaceExpression(FACE_LISTENING);
+        sendAckSimple(id, "listening (VAD on)");
+    }
+    else if (method == "snapshot") sendNack(id, "not implemented in v1");
+    else                           sendNack(id, String("unknown method: ") + method);
 }
 
 // ── WebSocket event handler ──────────────────────────────────────────────

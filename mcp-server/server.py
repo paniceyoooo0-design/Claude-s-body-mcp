@@ -37,6 +37,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -182,19 +183,34 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
     # Device will upload via POST /upload/audio, then emit `audio_ready` with
     # the path it learned from the upload response. Generous timeout: record
     # duration + 5s for upload + processing.
+    #
+    # Fallback: ESP32 sometimes drops its WS right after a big HTTPS upload
+    # (TLS contention) — the audio_ready event gets lost on the wire. If the
+    # event never arrives, scan CAPTURE_DIR for any rec_*.wav newer than when
+    # we started listening and use the newest one. The upload itself succeeds
+    # even when the post-event fails, so the file is reliably on disk.
+    listen_started = time.time()
+    full: Path | None = None
     try:
         event = await _await_event("audio_ready", timeout=duration_ms / 1000.0 + 10)
-    except asyncio.TimeoutError as e:
-        return _err(str(e))
+        rel_path = event.get("path", "")
+        candidate = (CAPTURE_DIR / os.path.basename(rel_path)).resolve()
+        if (str(candidate).startswith(str(CAPTURE_DIR.resolve())) and candidate.exists()):
+            full = candidate
+    except asyncio.TimeoutError:
+        logger.info("audio_ready event missing — falling back to filesystem scan")
 
-    rel_path = event.get("path", "")
-    # Validate the device-claimed path is inside CAPTURE_DIR — defends against
-    # a malicious or buggy device asking us to read /etc/passwd via STT.
-    full = (CAPTURE_DIR / os.path.basename(rel_path)).resolve()
-    if not str(full).startswith(str(CAPTURE_DIR.resolve())):
-        return _err(f"invalid audio path: {rel_path}")
-    if not full.exists():
-        return _err(f"audio file missing after upload: {full}")
+    if full is None:
+        # Pick the most recent rec_*.wav uploaded since we started waiting.
+        candidates = [
+            p for p in CAPTURE_DIR.glob("rec_*.wav")
+            if p.stat().st_mtime >= listen_started - 0.5
+        ]
+        if not candidates:
+            return _err(f"no recording uploaded within {duration_ms / 1000.0 + 10}s "
+                        "(device may have stayed silent, or upload failed)")
+        full = max(candidates, key=lambda p: p.stat().st_mtime)
+        logger.info("listen fallback: picked %s", full)
 
     try:
         result = transcribe(full, lang_hint=lang or None)

@@ -21,6 +21,7 @@
 #include "face_service.h"
 #include "servo_service.h"
 #include "led_service.h"
+#include "mic_service.h"
 #include "ws_client.h"
 
 void setup() {
@@ -43,6 +44,10 @@ void setup() {
     }
 
     initLeds();   // clears any leftover LED state from previous firmware
+
+    if (!initMicrophone()) {
+        Serial.println("[WARN] Mic init failed - listen disabled");
+    }
 
     connectWiFi();
     // syncServerHour was an old API endpoint on the LAN server; v1 firmware
@@ -68,6 +73,15 @@ void loop() {
     // Audio playback pipeline (queue → download → speaker).
     checkPendingPlayback();
     updateLipSync();           // amplitude-driven mouth animation
+    updateMicrophone();        // VAD → record → upload → audio_ready event
+
+    // After speaker finishes, bring the mic back up (they share I2S).
+    if (micResumeRequested && !isPlaying) {
+        micResumeRequested = false;
+        if (!M5.Mic.isRunning()) {
+            initMicrophone();
+        }
+    }
 
     // Playback finish detection — same logic as original firmware, lifted
     // verbatim except we no longer call the old HTTP server completion hook.
