@@ -1,0 +1,45 @@
+# Caddyfile for body.aerogelovepanice.com — deploy on VPS host (not in container).
+#
+# Put at /etc/caddy/Caddyfile or include from there, then:
+#   sudo systemctl reload caddy
+#
+# Cloudflare DNS for body.aerogelovepanice.com points at this VPS in
+# DNS-only (grey cloud) mode so Caddy can issue Let's Encrypt certs
+# without Cloudflare's edge stripping them.
+
+body.aerogelovepanice.com {
+    # Device WebSocket. wss://body/ws — note Caddy needs explicit ws upgrade
+    # config; the @websockets matcher + reverse_proxy is the standard idiom.
+    @websockets {
+        path /ws
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @websockets {
+        reverse_proxy 127.0.0.1:8765
+    }
+
+    # TTS audio pull. Device fetches https://body/audio/<file>.wav after we
+    # POST it the URL via WS. Caddy strips nothing — media_server expects
+    # the /audio/<filename> path verbatim.
+    handle /audio/* {
+        reverse_proxy 127.0.0.1:8766
+    }
+
+    # Recording + photo uploads. Same media server.
+    handle /upload/* {
+        reverse_proxy 127.0.0.1:8766
+    }
+
+    # MCP streamable-http transport. Claude clients (Code/Desktop/browser)
+    # hit https://body/mcp/. The gateway's MCP app is mounted at root inside
+    # the container, so we strip the /mcp prefix here with handle_path.
+    handle_path /mcp/* {
+        reverse_proxy 127.0.0.1:8767
+    }
+
+    # Everything else: 404 (no public root page on purpose).
+    handle {
+        respond "not found" 404
+    }
+}

@@ -1,0 +1,35 @@
+# Claude's body MCP gateway — production compose file for VPS deploy.
+#
+# Usage on VPS:
+#   cd /opt/Claude-s-body-mcp
+#   cp mcp-server/.env.example .env
+#   # ... fill .env with real STACKCHAN_TOKEN + ELEVENLABS_API_KEY + PUBLIC_BASE_URL
+#   docker compose up -d --build
+#
+# Caddy on the host reverse-proxies:
+#   wss://body.aerogelovepanice.com/ws       -> container:8765   (device WS)
+#   https://body.aerogelovepanice.com/audio/* -> container:8766  (TTS pull)
+#   https://body.aerogelovepanice.com/upload/* -> container:8766 (uploads)
+#   https://body.aerogelovepanice.com/mcp/    -> container:8767  (MCP HTTP)
+
+services:
+  gateway:
+    build: .
+    container_name: claudes-body-gateway
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Bind to localhost only — Caddy on host fronts all public traffic.
+      # If you want to test direct (no Caddy), change to "8765:8765" etc.
+      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:8766:8766"
+      - "127.0.0.1:8767:8767"
+    volumes:
+      # Persist captures across restarts so old recordings/photos survive.
+      - ./captures:/root/.stackchan/captures
+      # TTS WAVs are throwaway — let the container manage /tmp itself.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

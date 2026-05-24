@@ -432,10 +432,44 @@ def main() -> None:
                     await media_runner.cleanup()
                     await link.stop()
 
-        app = Starlette(
+        # Bearer auth for the MCP transport. Distinct from STACKCHAN_TOKEN
+        # (device auth) so a leak of one doesn't compromise the other —
+        # same separation the old body-mcp gateway used. Raw ASGI rather
+        # than BaseHTTPMiddleware to avoid buffering bugs on streaming
+        # responses (the streamable-http transport pushes JSON-RPC chunks
+        # for long-running tool calls; buffering them would stall the
+        # client until the call completes).
+        def bearer_middleware(asgi_app):
+            async def middleware(scope, receive, send):
+                if scope["type"] == "http":
+                    expected = os.environ.get("MCP_TOKEN", "")
+                    if expected:
+                        headers = dict(scope.get("headers", []))
+                        got = headers.get(b"authorization", b"").decode("latin-1", "replace")
+                        if got != f"Bearer {expected}":
+                            await send({
+                                "type": "http.response.start",
+                                "status": 401,
+                                "headers": [(b"content-type", b"application/json")],
+                            })
+                            await send({
+                                "type": "http.response.body",
+                                "body": b'{"error":"Unauthorized"}',
+                            })
+                            return
+                await asgi_app(scope, receive, send)
+            return middleware
+
+        inner = Starlette(
             routes=[Mount("/", app=mcp.streamable_http_app())],
             lifespan=combined_lifespan,
         )
+        app = bearer_middleware(inner)
+        if not os.environ.get("MCP_TOKEN"):
+            logger.warning(
+                "MCP_TOKEN not set — MCP endpoint is OPEN. Set it in .env "
+                "before exposing on public internet."
+            )
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     else:
         logger.info("MCP stdio mode (lifespan starts WS:%d, media:%d)",
