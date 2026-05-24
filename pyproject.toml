@@ -1,23 +1,27 @@
 [project]
-name = "stackchan-tools"
-version = "0.1.0"
-description = "Host-side tooling for the Stack-chan voice avatar."
+name = "claudes-body-mcp"
+version = "0.2.0"
+description = "Gateway for Claude's body — outbound-WS stackchan with ElevenLabs TTS/STT."
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.10",
     "requests>=2.31",
+    "websockets>=13",
+    "aiohttp>=3.10",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=1.3.0",
     "ruff>=0.8",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "mcp-server"]
 addopts = "-ra"
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
