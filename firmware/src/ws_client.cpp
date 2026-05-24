@@ -8,6 +8,7 @@
 #include "servo_service.h"
 #include "face_service.h"
 #include "led_service.h"
+#include "camera_upload.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -195,7 +196,15 @@ static void onMessage(const char* payload, size_t length) {
         setFaceExpression(FACE_LISTENING);
         sendAckSimple(id, "listening (VAD on)");
     }
-    else if (method == "snapshot") sendNack(id, "not implemented in v1");
+    else if (method == "snapshot") {
+        // Ack immediately so the gateway tool can subscribe to the
+        // photo_ready event without racing with our upload completion.
+        // The actual capture+upload+emit happens after this ack returns.
+        sendAckSimple(id, "capturing");
+        if (!captureUploadAndNotify()) {
+            Serial.println("[WS] snapshot capture+upload failed");
+        }
+    }
     else                           sendNack(id, String("unknown method: ") + method);
 }
 

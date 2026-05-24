@@ -22,6 +22,7 @@
 #include "servo_service.h"
 #include "led_service.h"
 #include "mic_service.h"
+#include "camera_service.h"
 #include "ws_client.h"
 
 void setup() {
@@ -47,6 +48,10 @@ void setup() {
 
     if (!initMicrophone()) {
         Serial.println("[WARN] Mic init failed - listen disabled");
+    }
+
+    if (!initCamera()) {
+        Serial.println("[WARN] Camera init failed - snapshot disabled");
     }
 
     connectWiFi();

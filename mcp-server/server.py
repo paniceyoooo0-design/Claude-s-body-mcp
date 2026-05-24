@@ -316,22 +316,38 @@ async def stackchan_see() -> list:
     the LLM can see it directly.
 
     GC0308 sensor, fixed-focus ~50cm. Things closer than that will blur."""
+    if not link.online:
+        return [_err("Stack-chan offline (no WS connection)")]
+
+    # Same robust pattern as stackchan_listen: best-effort RPC, then prefer
+    # the photo_ready event but fall back to scanning CAPTURE_DIR for any
+    # capture_*.jpg uploaded since we started. ESP32 may drop WS right
+    # after the HTTPS upload (TLS contention), losing the event.
+    snap_started = time.time()
     try:
         await link.request("snapshot")
-    except (DeviceOffline, DeviceError) as e:
-        return [_err(str(e))]
+    except DeviceError as e:
+        logger.info("snapshot RPC didn't ack (%s) — proceeding to wait for upload", e)
 
+    full: Path | None = None
     try:
         event = await _await_event("photo_ready", timeout=10.0)
-    except asyncio.TimeoutError as e:
-        return [_err(str(e))]
+        rel_path = event.get("path", "")
+        candidate = (CAPTURE_DIR / os.path.basename(rel_path)).resolve()
+        if (str(candidate).startswith(str(CAPTURE_DIR.resolve())) and candidate.exists()):
+            full = candidate
+    except asyncio.TimeoutError:
+        logger.info("photo_ready event missing — falling back to filesystem scan")
 
-    rel_path = event.get("path", "")
-    full = (CAPTURE_DIR / os.path.basename(rel_path)).resolve()
-    if not str(full).startswith(str(CAPTURE_DIR.resolve())):
-        return [_err(f"invalid photo path: {rel_path}")]
-    if not full.exists():
-        return [_err(f"photo missing after upload: {full}")]
+    if full is None:
+        candidates = [
+            p for p in CAPTURE_DIR.glob("capture_*.jpg")
+            if p.stat().st_mtime >= snap_started - 0.5
+        ]
+        if not candidates:
+            return [_err("no photo uploaded within 10s (camera may have failed)")]
+        full = max(candidates, key=lambda p: p.stat().st_mtime)
+        logger.info("see fallback: picked %s", full)
 
     jpeg = full.read_bytes()
     return [
