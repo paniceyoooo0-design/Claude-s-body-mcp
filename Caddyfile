@@ -32,9 +32,11 @@ body.aerogelovepanice.com {
     }
 
     # MCP streamable-http transport. Claude clients (Code/Desktop/browser)
-    # hit https://body/mcp/. The gateway's MCP app is mounted at root inside
-    # the container, so we strip the /mcp prefix here with handle_path.
-    handle_path /mcp/* {
+    # hit https://body/mcp. The FastMCP streamable_http_app listens on the
+    # path `/mcp` by default — do NOT strip the prefix or the upstream
+    # router 404s. (This bit me on first deploy; leaving the comment as a
+    # tripwire for anyone tempted to "clean up" with handle_path.)
+    handle /mcp* {
         reverse_proxy 127.0.0.1:8767
     }
 
