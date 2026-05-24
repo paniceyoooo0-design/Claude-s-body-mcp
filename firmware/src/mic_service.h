@@ -27,4 +27,17 @@
 bool initMicrophone();
 void updateMicrophone();
 
+// Arm the mic for a single capture window of `duration_ms`. The VAD only
+// runs while armed — outside a window, the mic is fully idle so it doesn't
+// fight WS/camera/playback for TLS/CPU. After a successful capture+upload,
+// OR after duration_ms elapses with no trigger, the mic auto-disarms.
+//
+// Called by ws_client's handleListen — replaces the original "always-on VAD"
+// design which ran the state machine every loop and saturated the TLS stack
+// with ambient-triggered uploads.
+void armMicrophone(uint32_t duration_ms);
+
+// True iff currently in an active listen window.
+bool isMicArmed();
+
 #endif

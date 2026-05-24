@@ -53,6 +53,33 @@ static int16_t pre_trigger_buf[PRE_TRIGGER_BUFFER_SAMPLES];
 static size_t  pre_buf_write = 0;
 static bool    pre_buf_full  = false;
 
+// Armed-window state (v2.3 redesign): mic is off-by-default; ws_client's
+// listen handler arms us for one window. Outside the window the state
+// machine doesn't even run, freeing the TLS stack for WS + camera.
+static bool     mic_armed = false;
+static uint32_t arm_deadline_ms = 0;
+
+static void disarmMic() {
+    mic_armed = false;
+    mic_state = MIC_IDLE;
+    pre_buf_write = 0;
+    pre_buf_full  = false;
+    silence_start_ms = 0;
+    trigger_start_ms = 0;
+}
+
+void armMicrophone(uint32_t duration_ms) {
+    mic_armed = true;
+    arm_deadline_ms = millis() + duration_ms;
+    mic_state = MIC_IDLE;
+    Serial.printf("[MIC] armed for %u ms\n", (unsigned)duration_ms);
+    setFaceExpression(FACE_LISTENING);
+}
+
+bool isMicArmed() {
+    return mic_armed;
+}
+
 static inline float calcRmsNorm(const int16_t* data, size_t n) {
     if (n == 0) return 0.0f;
     float sum = 0.0f;
@@ -217,6 +244,20 @@ void updateMicrophone() {
     if (!M5.Mic.isEnabled()) return;
     if (isPlaying) return;
 
+    // The big change vs v2.2: only do anything when armed. Outside an armed
+    // window we don't even read mic frames — the TLS stack gets a break and
+    // ambient noise never triggers stray uploads.
+    if (!mic_armed) return;
+
+    // Window expired without a trigger fully completing? Disarm cleanly so
+    // we don't sit in TRIGGERING / RECORDING after the LLM gave up waiting.
+    if ((int32_t)(millis() - arm_deadline_ms) >= 0 && mic_state != MIC_SENDING) {
+        Serial.println("[MIC] window expired with no capture");
+        setFaceExpression(FACE_IDLE);
+        disarmMic();
+        return;
+    }
+
     static int16_t frame[MIC_FRAME_SAMPLES];
     if (!M5.Mic.record(frame, MIC_FRAME_SAMPLES, MIC_SAMPLE_RATE)) return;
     size_t got = MIC_FRAME_SAMPLES;
@@ -299,7 +340,10 @@ void updateMicrophone() {
                     }
                 }
                 setFaceExpression(FACE_IDLE);
-                mic_state = MIC_IDLE;
+                // After upload (or invalid-audio drop), disarm. One listen
+                // window = one capture max. LLM calls listen again to arm
+                // for another.
+                disarmMic();
             }
             break;
         }

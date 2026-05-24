@@ -9,6 +9,7 @@
 #include "face_service.h"
 #include "led_service.h"
 #include "camera_upload.h"
+#include "mic_service.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -189,12 +190,12 @@ static void onMessage(const char* payload, size_t length) {
         sendAckSimple(id);
     }
     else if (method == "listen") {
-        // VAD is always running — the device auto-uploads on voice and emits
-        // audio_ready. `listen` is mostly an acknowledge-and-wait signal from
-        // the LLM; we just ack so the gateway tool can subscribe to the next
-        // audio_ready event with its timeout.
-        setFaceExpression(FACE_LISTENING);
-        sendAckSimple(id, "listening (VAD on)");
+        // Arm the mic for one capture window. Mic is otherwise off so it
+        // doesn't burn TLS bandwidth on ambient triggers. `duration_ms`
+        // bounds how long we wait for speech before disarming silently.
+        uint32_t dur = params["duration_ms"] | 8000;
+        armMicrophone(dur);
+        sendAckSimple(id, "listening");
     }
     else if (method == "snapshot") {
         // Ack immediately so the gateway tool can subscribe to the
