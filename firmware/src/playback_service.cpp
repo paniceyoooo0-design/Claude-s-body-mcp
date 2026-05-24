@@ -1,5 +1,6 @@
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <math.h>
 #include "playback_service.h"
@@ -170,8 +171,27 @@ bool downloadVoice(const String& url, uint8_t** outData, size_t* outSize) {
     HTTPClient http;
     Serial.printf("[DOWNLOAD] URL: %s\n", url.c_str());
 
-    http.begin(url);
+    // For https:// URLs, HTTPClient::begin(url) creates an internal
+    // WiFiClientSecure with NO CA bundle attached — the TLS handshake then
+    // fails silently before any HTTP request reaches the proxy. Bring our
+    // own WiFiClientSecure with setInsecure() so cert verification is
+    // skipped. Acceptable for now because the audio URL is signed-by-token
+    // (Bearer in request headers, but here we're checking the URL itself
+    // is unguessable). TODO: bake the Let's Encrypt ISRG Root X1 CA in if
+    // we want strict TLS later.
+    WiFiClientSecure secure;
+    secure.setInsecure();
+    if (url.startsWith("https://")) {
+        http.begin(secure, url);
+    } else {
+        http.begin(url);
+    }
     http.setTimeout(DOWNLOAD_TIMEOUT_MS);
+    // The media_server protects /audio/* with the same STACKCHAN_TOKEN bearer
+    // it uses for WS auth — so a stranger who guesses the timestamped URL
+    // can't burn our TTS quota or read recordings. Pass the same token we
+    // already use for the WS link.
+    http.addHeader("Authorization", String("Bearer ") + STACKCHAN_TOKEN);
     int httpCode = http.GET();
 
     if (httpCode != HTTP_CODE_OK) {
