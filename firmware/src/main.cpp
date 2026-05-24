@@ -20,6 +20,7 @@
 #include "playback_service.h"
 #include "face_service.h"
 #include "servo_service.h"
+#include "led_service.h"
 #include "ws_client.h"
 
 void setup() {
@@ -40,6 +41,8 @@ void setup() {
     if (!initServo()) {
         Serial.println("[WARN] Servo init failed - head movement disabled");
     }
+
+    initLeds();   // clears any leftover LED state from previous firmware
 
     connectWiFi();
     // syncServerHour was an old API endpoint on the LAN server; v1 firmware

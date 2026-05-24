@@ -7,6 +7,7 @@
 #include "queue_manager.h"
 #include "servo_service.h"
 #include "face_service.h"
+#include "led_service.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -160,7 +161,32 @@ static void onMessage(const char* payload, size_t length) {
              method == "home")     handleGesture(id, method);
     else if (method == "face")     handleFace(id, params);
     else if (method == "status")   handleStatus(id);
-    else if (method.startsWith("led_"))                  sendNack(id, "led not implemented in v1");
+    else if (method == "led_one") {
+        uint8_t index = params["index"] | 0;
+        String color = params["color"] | "";
+        if (setLedOne(index, color)) sendAckSimple(id);
+        else                         sendNack(id, "bad color or index");
+    }
+    else if (method == "led_all") {
+        String color = params["color"] | "";
+        if (setLedsAll(color)) sendAckSimple(id);
+        else                   sendNack(id, "bad color");
+    }
+    else if (method == "led_multi") {
+        JsonArrayConst arr = params["colors"].as<JsonArrayConst>();
+        if (arr.isNull() || arr.size() != 12) {
+            sendNack(id, "colors must be a 12-element array");
+        } else {
+            String cs[12];
+            for (int i = 0; i < 12; i++) cs[i] = arr[i].as<const char*>();
+            if (setLedsBulk(cs)) sendAckSimple(id);
+            else                 sendNack(id, "bad color in colors[]");
+        }
+    }
+    else if (method == "led_clear") {
+        clearLeds();
+        sendAckSimple(id);
+    }
     else if (method == "listen" || method == "snapshot") sendNack(id, "not implemented in v1");
     else                                                  sendNack(id, String("unknown method: ") + method);
 }
