@@ -45,7 +45,9 @@ async def main() -> int:
 
     headers = {"Authorization": f"Bearer {MCP_TOKEN}"}
     try:
-        async with streamablehttp_client(f"{BASE}/mcp/", headers=headers) as (
+        # Use /mcp (no trailing slash) — server redirects /mcp/ -> /mcp but
+        # streamablehttp_client doesn't follow 307s cleanly.
+        async with streamablehttp_client(f"{BASE}/mcp", headers=headers) as (
             read, write, _get_session_id,
         ):
             async with ClientSession(read, write) as session:
