@@ -340,14 +340,23 @@ async def stackchan_see() -> list:
         logger.info("photo_ready event missing — falling back to filesystem scan")
 
     if full is None:
-        candidates = [
-            p for p in CAPTURE_DIR.glob("capture_*.jpg")
-            if p.stat().st_mtime >= snap_started - 0.5
-        ]
-        if not candidates:
-            return [_err("no photo uploaded within 10s (camera may have failed)")]
-        full = max(candidates, key=lambda p: p.stat().st_mtime)
-        logger.info("see fallback: picked %s", full)
+        # The device is often backed up with mic uploads (TLS contention)
+        # so the photo upload can lag well past the event timeout. Poll the
+        # filesystem for another 20s — total tool wall time then capped at
+        # ~30s worst case, which still beats giving up.
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            candidates = [
+                p for p in CAPTURE_DIR.glob("capture_*.jpg")
+                if p.stat().st_mtime >= snap_started - 0.5
+            ]
+            if candidates:
+                full = max(candidates, key=lambda p: p.stat().st_mtime)
+                logger.info("see fallback (poll): picked %s", full)
+                break
+            await asyncio.sleep(1)
+        if full is None:
+            return [_err("no photo uploaded within 30s (device too busy or camera failed)")]
 
     jpeg = full.read_bytes()
     return [
