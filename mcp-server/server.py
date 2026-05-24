@@ -173,12 +173,16 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
     runs ElevenLabs Scribe → returns transcript.
     """
     duration_ms = max(500, min(30000, duration_ms))  # clamp to sane range
+    # The listen RPC is best-effort. Device may be mid-upload (HTTPS POST
+    # blocks the WS event loop on ESP32) and not ack in time — that's OK,
+    # the mic is always running with VAD anyway. We only fail hard if the
+    # device is fully offline (no WS connection at all).
+    if not link.online:
+        return _err("Stack-chan offline (no WS connection)")
     try:
         await link.request("listen", {"duration_ms": duration_ms})
-    except DeviceOffline:
-        return _err("Stack-chan offline (no WS connection)")
     except DeviceError as e:
-        return _err(f"Device refused listen: {e}")
+        logger.info("listen RPC didn't ack (%s) — proceeding to wait for upload", e)
 
     # Device will upload via POST /upload/audio, then emit `audio_ready` with
     # the path it learned from the upload response. Generous timeout: record
