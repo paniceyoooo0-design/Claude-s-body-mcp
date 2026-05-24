@@ -71,8 +71,17 @@ link = DeviceLink()
 
 
 @asynccontextmanager
-async def _lifespan(_server):
-    """Start device WS server + media HTTP server on the FastMCP loop."""
+async def _bringup(_server):
+    """Bring the device WS server + media HTTP server up once per process.
+
+    Used as the lifespan for two transports:
+    - stdio: FastMCP's per-session lifespan IS the per-process lifespan (one
+      session per stdio mcp.run() call).
+    - streamable-http: attached to the outer Starlette app, NOT to FastMCP.
+      FastMCP's session_manager spins up a new "session" per MCP request and
+      runs its lifespan each time — putting WS+media bind here would crash
+      every request after the first with EADDRINUSE on port 8765.
+    """
     await link.start(host="0.0.0.0", port=WS_PORT)
     media_runner = await run_media_server(host="0.0.0.0", port=MEDIA_PORT)
     logger.info("Gateway up: WS on %d, media on %d, public base %s",
@@ -86,12 +95,12 @@ async def _lifespan(_server):
 
 mcp = FastMCP(
     "stackchan",
-    lifespan=_lifespan,
-    # json_response=True makes the POST /mcp response come back as plain
-    # JSON-RPC instead of FastMCP's default SSE stream. The default mode
-    # paired-streams responses on a GET connection, which times out behind
-    # Caddy because the GET-side machinery is fragile in reverse-proxy
-    # setups. JSON-response is what every short-lived tool call needs.
+    # No lifespan here — see _bringup docstring. stdio mode wires it below;
+    # http mode wires it on the outer Starlette app.
+    # json_response=True: POST /mcp returns plain JSON-RPC instead of FastMCP's
+    # default text/event-stream paired-stream response. SSE mode times out
+    # behind Caddy because the GET-side machinery is fragile in reverse-proxy
+    # setups; plain JSON is what every short-lived tool call needs.
     json_response=True,
 )
 
@@ -426,20 +435,17 @@ def main() -> None:
 
         @asynccontextmanager
         async def combined_lifespan(_app):
-            await link.start(host="0.0.0.0", port=WS_PORT)
-            media_runner = await run_media_server(host="0.0.0.0", port=MEDIA_PORT)
-            # FastMCP's session_manager.run() is the lifespan it would have
-            # installed itself — we drive it manually since we're mounting.
-            async with mcp.session_manager.run():
-                logger.info(
-                    "Gateway up: WS:%d, media:%d, MCP:%d, public=%s",
-                    WS_PORT, MEDIA_PORT, port, PUBLIC_BASE_URL,
-                )
-                try:
+            # _bringup binds WS + media (process-scoped). Then drive the MCP
+            # session_manager — that's the lifespan FastMCP would install
+            # itself if we let it own the app, but since we're mounting it
+            # inside our own Starlette we run it manually here.
+            async with _bringup(None):
+                async with mcp.session_manager.run():
+                    logger.info(
+                        "Gateway up: WS:%d, media:%d, MCP:%d, public=%s",
+                        WS_PORT, MEDIA_PORT, port, PUBLIC_BASE_URL,
+                    )
                     yield
-                finally:
-                    await media_runner.cleanup()
-                    await link.stop()
 
         # Bearer auth for the MCP transport. Distinct from STACKCHAN_TOKEN
         # (device auth) so a leak of one doesn't compromise the other —
@@ -483,6 +489,10 @@ def main() -> None:
     else:
         logger.info("MCP stdio mode (lifespan starts WS:%d, media:%d)",
                     WS_PORT, MEDIA_PORT)
+        # stdio mode: install _bringup as the FastMCP lifespan now. (Couldn't
+        # do this at module-level FastMCP() construction because http mode
+        # also imports this module and would double-run _bringup.)
+        mcp.settings.lifespan = _bringup  # type: ignore[attr-defined]
         mcp.run(transport="stdio")
 
 
