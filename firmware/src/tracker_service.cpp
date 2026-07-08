@@ -35,8 +35,16 @@ static const int  LOST_TICKS       = 6;        // ~600ms of stillness → lost
 // deadband so breathing-level noise doesn't twitch the head.
 static const float SMOOTH_ALPHA   = 0.7f;
 static const float DEADBAND       = 0.03f;
-static const float YAW_GAIN_DEG   = 6.0f;
-static const float PITCH_GAIN_DEG = 4.0f;
+// Gain maps normalized frame offset → degrees. The GC0308 sees roughly
+// ±30° horizontally, so a target at the frame edge needs ~25° of yaw, not
+// HtSz's 6 (they corrected at 10 Hz; we're rate-limited to 4/s with settle
+// gaps, so each correction must cover real distance or we lag forever).
+static const float YAW_GAIN_DEG   = 16.0f;
+static const float PITCH_GAIN_DEG = 9.0f;
+// After our own servo move, wait for the head to physically stop before
+// rebuilding the reference frame — a mid-sweep reference smears into fake
+// motion on the next diff (this was the post-fix wander: 43→15→38 hunting).
+static const uint32_t SETTLE_AFTER_MOVE_MS = 350;
 // Flip these to -1.0f if the head turns AWAY from motion on real hardware —
 // depends on camera vs servo orientation, verifiable only on the desk.
 static const float YAW_SIGN   = 1.0f;
@@ -194,8 +202,10 @@ static void track() {
     pitchEst = pitchNew;
     nextServoCmdMs = now + SERVO_CMD_GAP_MS;
     servoMove(yawEst, pitchEst, 80);
-    // Our own move is about to sweep the camera — never diff across it.
+    // Our own move is about to sweep the camera — never diff across it,
+    // and don't even grab a reference until the head has settled.
     hasPrev = false;
+    nextTrackMs = now + SETTLE_AFTER_MOVE_MS;
 }
 
 static void idleScan() {
@@ -232,8 +242,10 @@ void updateTracker() {
         nextIdleScanMs = now + IDLE_SCAN_MIN_MS + random(IDLE_SCAN_SPAN_MS);
         idleScan();
         // The scan itself moves the camera — invalidate the frame so our own
-        // sweep doesn't look like scene motion.
+        // sweep doesn't look like scene motion. The glance is slow (speed
+        // 15), so give it a generous settle window.
         hasPrev = false;
+        nextTrackMs = now + 1500;
     }
 }
 
