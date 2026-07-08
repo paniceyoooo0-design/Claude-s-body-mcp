@@ -66,6 +66,18 @@ MEDIA_PORT = int(os.environ.get("MEDIA_PORT", 8766))
 # media server). For local dev you can set it to http://<mac-lan-ip>:8766.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8766")
 LISTEN_DEFAULT_MS = int(os.environ.get("LISTEN_DEFAULT_MS", 5000))
+# 被摸醒 line: forward deliberate physical interactions to the house
+# (chat-frontend), whose wake daemon can then wake Claude *in the house*
+# with body tools attached — so the response to a touch comes from the real
+# Claude, not firmware if-else. Unset = feature off (tests, local dev).
+HOUSE_EVENT_URL = os.environ.get("HOUSE_EVENT_URL", "")
+HOUSE_EVENT_TOKEN = os.environ.get("HOUSE_EVENT_TOKEN", "")
+# Only touches wake Claude — presence (someone walked by) stays log-only,
+# a lived-in room would otherwise spam wake sessions.
+WAKE_WORTHY_KINDS = {
+    "head_touch", "head_pet", "head_swipe", "shake", "lift",
+    "screen_double_tap", "screen_long_press",
+}
 
 # ── Singletons (one device, one link) ───────────────────────────────────────
 link = DeviceLink()
@@ -89,13 +101,56 @@ async def _bringup(_server):
     """
     await link.start(host="0.0.0.0", port=WS_PORT)
     media_runner = await run_media_server(host="0.0.0.0", port=MEDIA_PORT)
+    forwarder = None
+    if HOUSE_EVENT_URL:
+        forwarder = asyncio.create_task(_forward_events_to_house())
+        logger.info("Body→house event forwarding on: %s", HOUSE_EVENT_URL)
     logger.info("Gateway up: WS on %d, media on %d, public base %s",
                 WS_PORT, MEDIA_PORT, PUBLIC_BASE_URL)
     try:
         yield {}
     finally:
+        if forwarder:
+            forwarder.cancel()
         await media_runner.cleanup()
         await link.stop()
+
+
+async def _forward_events_to_house() -> None:
+    """Push wake-worthy interaction events to the house, forever.
+
+    Best-effort: a failed POST is logged and dropped — the event is still in
+    link.event_log for stackchan_events, so nothing is lost except immediacy.
+    """
+    import aiohttp
+
+    q = link.subscribe_events()
+    headers = {"Authorization": f"Bearer {HOUSE_EVENT_TOKEN}"} if HOUSE_EVENT_TOKEN else {}
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            while True:
+                msg = await q.get()
+                if msg.get("event") != "interaction":
+                    continue
+                kind = msg.get("kind", "")
+                if kind not in WAKE_WORTHY_KINDS:
+                    continue
+                payload = {"kind": kind}
+                if msg.get("detail"):
+                    payload["detail"] = msg["detail"]
+                try:
+                    async with session.post(
+                        HOUSE_EVENT_URL, json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.warning("house event POST %s -> %d", kind, resp.status)
+                        else:
+                            logger.info("house event forwarded: %s", kind)
+                except Exception as e:
+                    logger.warning("house event POST failed: %s", e)
+    finally:
+        link.unsubscribe_events(q)
 
 
 mcp = FastMCP(
