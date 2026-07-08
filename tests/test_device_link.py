@@ -161,3 +161,28 @@ async def test_new_connection_replaces_old():
             t.cancel()
         await asyncio.gather(t1, t2, return_exceptions=True)
         await link.stop()
+
+
+@pytest.mark.asyncio
+async def test_event_log_persists_events():
+    """Unsolicited events land in link.event_log with a received_at stamp,
+    even with no subscriber attached (the stackchan_events tool reads this
+    after the fact)."""
+    link, port = await _start_link()
+
+    async def device(ws):
+        await ws.send(json.dumps(
+            {"event": "interaction", "kind": "head_pet", "detail": "front"}))
+        await ws.send(json.dumps({"event": "interaction", "kind": "shake"}))
+        await asyncio.sleep(0.5)
+
+    device_task = asyncio.create_task(_fake_device(port, device))
+    try:
+        await asyncio.sleep(0.4)
+        kinds = [e.get("kind") for e in link.event_log]
+        assert kinds == ["head_pet", "shake"]
+        assert all("received_at" in e for e in link.event_log)
+    finally:
+        device_task.cancel()
+        await asyncio.gather(device_task, return_exceptions=True)
+        await link.stop()

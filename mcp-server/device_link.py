@@ -40,6 +40,8 @@ import asyncio
 import json
 import logging
 import os
+import time
+from collections import deque
 from typing import Any
 
 import websockets
@@ -83,6 +85,11 @@ class DeviceLink:
         # Event subscribers — media_server uses this to know when device says
         # "audio_ready" so the MCP tool can pull the upload.
         self._event_listeners: list[asyncio.Queue[dict[str, Any]]] = []
+        # Persistent log of unsolicited events, for the stackchan_events
+        # tool. Subscriber queues above are transient (tools waiting on a
+        # signal); this answers "did anything happen while nobody was on
+        # the line?" — head pets, shakes, lifts, presence changes.
+        self.event_log: deque[dict[str, Any]] = deque(maxlen=200)
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -226,6 +233,9 @@ class DeviceLink:
                 logger.warning("Device responded to unknown id=%s", req_id)
             return
         if "event" in msg:
+            entry = dict(msg)
+            entry["received_at"] = time.time()
+            self.event_log.append(entry)
             for q in self._event_listeners:
                 # Non-blocking put — if a listener is full, drop the event for
                 # that listener rather than stalling the WS read loop.

@@ -17,12 +17,14 @@ Why this design vs migratorywhale's original HTTP-server-on-device:
 
 See [[project_stackchan_mcp]] memory for full direction history.
 
-Tools (13 total)
+Tools (14 total)
 ----------------
 migratorywhale-inspired (9):
     stackchan_say / listen / see / face / move / nod / shake / home / status
 LED set (4, from old body-mcp because migratorywhale didn't expose LEDs):
     stackchan_set_led / set_all_leds / set_leds / clear_leds
+interaction log (1, HtSz-inspired physical interactions):
+    stackchan_events — head touch/pet/swipe, shake/lift, screen gestures
 
 TTS+STT both go through ElevenLabs (Panice designed a voice; voice_id is in
 gateway/.env). Lip-sync is on-device: firmware reads audio amplitude in real
@@ -39,6 +41,7 @@ import sys
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mcp.server.fastmcp import Context, FastMCP, Image
@@ -454,6 +457,40 @@ async def stackchan_status() -> str:
     except (DeviceOffline, DeviceError) as e:
         return _err(str(e))
     return f"✅ Online | {info}"
+
+
+# Device housekeeping events that only matter to the tool waiting on them
+# (listen/see); hidden from the interaction log unless asked for.
+_PLUMBING_EVENTS = {"hello", "audio_ready", "photo_ready"}
+
+
+@mcp.tool()
+async def stackchan_events(clear: bool = True, include_all: bool = False) -> str:
+    """Read physical-interaction events since last check: head touches/pets,
+    head swipes, shakes, lifts, screen gestures (double-tap / swipe / long
+    press). The device logs these as they happen, so this answers "did Panice
+    pet me while I was away?".
+
+    clear: forget returned events after reading (default True).
+    include_all: also show plumbing events (hello / audio_ready / photo_ready).
+    """
+    events = list(link.event_log)
+    if not include_all:
+        events = [e for e in events if e.get("event") not in _PLUMBING_EVENTS]
+    if clear:
+        link.event_log.clear()
+    if not events:
+        state = "online" if link.online else "OFFLINE"
+        return f"(no interaction events; device {state})"
+    # Report in Beijing time — that's where the body and Panice live.
+    cst = timezone(timedelta(hours=8))
+    lines = []
+    for e in events:
+        ts = datetime.fromtimestamp(e["received_at"], tz=cst).strftime("%m-%d %H:%M:%S")
+        kind = e.get("kind") or e.get("event", "?")
+        detail = e.get("detail")
+        lines.append(f"{ts}  {kind}" + (f" ({detail})" if detail else ""))
+    return f"{len(events)} event(s):\n" + "\n".join(lines)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
