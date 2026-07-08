@@ -25,6 +25,25 @@
  * (via trackerHoldOff), audio playback, an armed mic, and snapshots.
  */
 
+// How much of a mind of its own the body has. Panice's framing: this is
+// Claude's external body, not a pet — so autonomous motion is opt-in.
+//   STILL  — head never moves by itself; frame-diff keeps running silently
+//            so presence events still reach the gateway ("eyes open, body
+//            still").
+//   AWARE  — head turns toward motion; no idle fidgeting. Boot default.
+//   LIVELY — AWARE plus random idle glances (the full HtSz pet behavior).
+enum AutonomyMode {
+    AUTONOMY_STILL  = 0,
+    AUTONOMY_AWARE  = 1,
+    AUTONOMY_LIVELY = 2,
+};
+
+void setAutonomyMode(AutonomyMode mode);
+AutonomyMode getAutonomyMode();
+const char* getAutonomyModeName();
+// Parse "still" / "aware" / "lively"; returns false on unknown string.
+bool autonomyModeFromString(const char* s, AutonomyMode* out);
+
 // Call in setup() after initCamera()/initServo().
 void initTracker();
 

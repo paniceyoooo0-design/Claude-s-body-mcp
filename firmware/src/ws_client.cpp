@@ -132,6 +132,7 @@ static void handleStatus(uint32_t id) {
     doc["free_psram"] = ESP.getFreePsram();
     doc["servo_ready"] = isServoReady();
     doc["face"] = getCurrentFaceName();
+    doc["autonomy"] = getAutonomyModeName();
     doc["wifi_rssi"] = WiFi.RSSI();
 
     // Battery info from AXP2101 via M5Unified. The CoreS3's small LiPo runs
@@ -183,6 +184,16 @@ static void onMessage(const char* payload, size_t length) {
              method == "home")     handleGesture(id, method);
     else if (method == "face")     handleFace(id, params);
     else if (method == "status")   handleStatus(id);
+    else if (method == "autonomy") {
+        const char* mode_str = params["mode"] | "";
+        AutonomyMode mode;
+        if (autonomyModeFromString(mode_str, &mode)) {
+            setAutonomyMode(mode);
+            sendAckSimple(id, mode_str);
+        } else {
+            sendNack(id, String("unknown autonomy mode: ") + mode_str);
+        }
+    }
     else if (method == "led_one") {
         uint8_t index = params["index"] | 0;
         String color = params["color"] | "";

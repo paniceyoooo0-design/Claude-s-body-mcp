@@ -57,11 +57,22 @@ static const uint32_t IDLE_SCAN_SPAN_MS = 8000;
 // would otherwise flood the event log.
 static const uint32_t APPEAR_EVENT_GAP_MS = 60000;
 
+// Servo command shaping. Without these the head re-aims at 10 Hz and every
+// aim shifts the camera, whose frame-diff then reads as fresh motion — the
+// tracker chases its own tail forever (observed on-desk: 1500+ servo
+// commands in a few minutes). Rate-limit the commands, ignore sub-1.5°
+// corrections, and drop the reference frame after every self-move so
+// ego-motion can never enter the diff.
+static const uint32_t SERVO_CMD_GAP_MS = 250;
+static const float    MIN_MOVE_DEG     = 1.5f;
+
 // ── State ────────────────────────────────────────────────────────────────
 static bool     enabled = false;
+static AutonomyMode autonomyMode = AUTONOMY_AWARE;
 static uint32_t holdOffUntil = 0;
 static uint32_t nextTrackMs = 0;
 static uint32_t nextIdleScanMs = 0;
+static uint32_t nextServoCmdMs = 0;
 
 static uint8_t  prevFrame[DS_W * DS_H];
 static uint8_t  curFrame[DS_W * DS_H];
@@ -161,14 +172,30 @@ static void track() {
     if (fabsf(smoothX) < DEADBAND) smoothX = 0;
     if (fabsf(smoothY) < DEADBAND) smoothY = 0;
 
-    yawEst   -= YAW_SIGN   * smoothX * YAW_GAIN_DEG;
-    pitchEst -= PITCH_SIGN * smoothY * PITCH_GAIN_DEG;
-    if (yawEst < -YAW_LIMIT_DEG) yawEst = -YAW_LIMIT_DEG;
-    if (yawEst >  YAW_LIMIT_DEG) yawEst =  YAW_LIMIT_DEG;
-    if (pitchEst < PITCH_MIN_DEG) pitchEst = PITCH_MIN_DEG;
-    if (pitchEst > PITCH_MAX_DEG) pitchEst = PITCH_MAX_DEG;
+    // STILL mode: eyes track, head doesn't. Presence events above still fire.
+    if (autonomyMode == AUTONOMY_STILL) return;
 
+    uint32_t now = millis();
+    if (now < nextServoCmdMs) return;
+
+    float yawNew   = yawEst   - YAW_SIGN   * smoothX * YAW_GAIN_DEG;
+    float pitchNew = pitchEst - PITCH_SIGN * smoothY * PITCH_GAIN_DEG;
+    if (yawNew < -YAW_LIMIT_DEG) yawNew = -YAW_LIMIT_DEG;
+    if (yawNew >  YAW_LIMIT_DEG) yawNew =  YAW_LIMIT_DEG;
+    if (pitchNew < PITCH_MIN_DEG) pitchNew = PITCH_MIN_DEG;
+    if (pitchNew > PITCH_MAX_DEG) pitchNew = PITCH_MAX_DEG;
+
+    if (fabsf(yawNew - yawEst) < MIN_MOVE_DEG &&
+        fabsf(pitchNew - pitchEst) < MIN_MOVE_DEG) {
+        return;   // correction too small to bother the servos with
+    }
+
+    yawEst = yawNew;
+    pitchEst = pitchNew;
+    nextServoCmdMs = now + SERVO_CMD_GAP_MS;
     servoMove(yawEst, pitchEst, 80);
+    // Our own move is about to sweep the camera — never diff across it.
+    hasPrev = false;
 }
 
 static void idleScan() {
@@ -201,13 +228,39 @@ void updateTracker() {
 
     track();
 
-    if (!tracking && now >= nextIdleScanMs) {
+    if (autonomyMode == AUTONOMY_LIVELY && !tracking && now >= nextIdleScanMs) {
         nextIdleScanMs = now + IDLE_SCAN_MIN_MS + random(IDLE_SCAN_SPAN_MS);
         idleScan();
         // The scan itself moves the camera — invalidate the frame so our own
         // sweep doesn't look like scene motion.
         hasPrev = false;
     }
+}
+
+void setAutonomyMode(AutonomyMode mode) {
+    autonomyMode = mode;
+    Serial.printf("[TRACK] autonomy -> %s\n", getAutonomyModeName());
+}
+
+AutonomyMode getAutonomyMode() {
+    return autonomyMode;
+}
+
+const char* getAutonomyModeName() {
+    switch (autonomyMode) {
+        case AUTONOMY_STILL:  return "still";
+        case AUTONOMY_AWARE:  return "aware";
+        case AUTONOMY_LIVELY: return "lively";
+        default:              return "unknown";
+    }
+}
+
+bool autonomyModeFromString(const char* s, AutonomyMode* out) {
+    if (!s || !out) return false;
+    if (strcmp(s, "still") == 0)  { *out = AUTONOMY_STILL;  return true; }
+    if (strcmp(s, "aware") == 0)  { *out = AUTONOMY_AWARE;  return true; }
+    if (strcmp(s, "lively") == 0) { *out = AUTONOMY_LIVELY; return true; }
+    return false;
 }
 
 void trackerHoldOff(uint32_t ms) {

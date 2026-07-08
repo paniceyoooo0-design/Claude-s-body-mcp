@@ -17,14 +17,15 @@ Why this design vs migratorywhale's original HTTP-server-on-device:
 
 See [[project_stackchan_mcp]] memory for full direction history.
 
-Tools (14 total)
+Tools (15 total)
 ----------------
 migratorywhale-inspired (9):
     stackchan_say / listen / see / face / move / nod / shake / home / status
 LED set (4, from old body-mcp because migratorywhale didn't expose LEDs):
     stackchan_set_led / set_all_leds / set_leds / clear_leds
-interaction log (1, HtSz-inspired physical interactions):
+interaction (2, HtSz-inspired physical interactions + autonomy dial):
     stackchan_events — head touch/pet/swipe, shake/lift, screen gestures
+    stackchan_autonomy — still / aware / lively self-motion modes
 
 TTS+STT both go through ElevenLabs (Panice designed a voice; voice_id is in
 gateway/.env). Lip-sync is on-device: firmware reads audio amplitude in real
@@ -457,6 +458,28 @@ async def stackchan_status() -> str:
     except (DeviceOffline, DeviceError) as e:
         return _err(str(e))
     return f"✅ Online | {info}"
+
+
+@mcp.tool()
+async def stackchan_autonomy(mode: str = "aware") -> str:
+    """Set how much the body moves on its own. Panice's framing: this is
+    Claude's external body, not a pet — autonomous motion is a dial.
+
+    mode:
+      'still'  — head never moves by itself; it still watches and reports
+                 presence events silently
+      'aware'  — head turns toward motion, no idle fidgeting (boot default)
+      'lively' — aware + random idle glances every few seconds
+    """
+    if mode not in ("still", "aware", "lively"):
+        return _err(f"unknown mode {mode!r} — use still / aware / lively")
+    try:
+        await link.request("autonomy", {"mode": mode})
+    except DeviceOffline:
+        return _err("Stack-chan offline (no WS connection)")
+    except DeviceError as e:
+        return _err(str(e))
+    return f"🤖 Autonomy: {mode}"
 
 
 # Device housekeeping events that only matter to the tool waiting on them
