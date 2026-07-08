@@ -25,3 +25,4 @@ void setFaceExpression(FaceExpression expr);
 void setMouthOpen(float ratio);  // 0.0~1.0 for lip sync
 void setWhaleFace(WhaleFace face);  // Direct face control
 const char* getCurrentFaceName();
+WhaleFace getCurrentWhaleFace();  // For save/restore around reactions

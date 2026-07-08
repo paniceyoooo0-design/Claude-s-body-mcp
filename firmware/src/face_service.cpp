@@ -106,6 +106,10 @@ void setWhaleFace(WhaleFace face) {
     currentFace = face;
 }
 
+WhaleFace getCurrentWhaleFace() {
+    return currentFace;
+}
+
 const char* getCurrentFaceName() {
     switch (currentFace) {
         case WHALE_CALM:     return "calm";

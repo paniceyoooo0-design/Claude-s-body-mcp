@@ -23,6 +23,7 @@
 #include "led_service.h"
 #include "mic_service.h"
 #include "camera_service.h"
+#include "interaction_service.h"
 #include "ws_client.h"
 
 void setup() {
@@ -61,11 +62,13 @@ void setup() {
     // can drive the sleepy face explicitly via stackchan_face("sleepy").
     initPlayback();            // audio queue + downloader
     initWsClient();            // start outbound WS to gateway
+    initInteraction();         // head touch + IMU + screen gestures
 }
 
 void loop() {
     M5StackChan.update();
     handleWsClient();          // WS state machine + reconnect
+    updateInteraction();       // touch/motion/gesture → reactions + events
 
     // Cheap-ish but periodic WiFi watchdog. The WS library reconnects when
     // its TCP socket drops, but if WiFi itself goes away we need to nudge it.
