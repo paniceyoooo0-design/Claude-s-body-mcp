@@ -74,6 +74,31 @@ bool initCamera() {
     return true;
 }
 
+bool isCameraReady() {
+    return cameraReady;
+}
+
+bool captureLuma(uint8_t* out, int outW, int outH) {
+    if (!cameraReady || !out) return false;
+
+    // No stale-frame flush here (unlike captureJpeg): the tracker calls this
+    // continuously, so "the frame captured right after our last return" is
+    // exactly the freshness we want — and flushing would halve the frame rate.
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) return false;
+
+    int sx = fb->width / outW;
+    int sy = fb->height / outH;
+    for (int dy = 0; dy < outH; dy++) {
+        for (int dx = 0; dx < outW; dx++) {
+            size_t srcOffset = ((size_t)dy * sy * fb->width + (size_t)dx * sx) * 2;
+            out[dy * outW + dx] = (srcOffset < fb->len) ? fb->buf[srcOffset] : 0;
+        }
+    }
+    esp_camera_fb_return(fb);
+    return true;
+}
+
 bool captureJpeg(uint8_t** outBuf, size_t* outLen, int quality) {
     if (!cameraReady) {
         Serial.println("[CAM] Not initialized");

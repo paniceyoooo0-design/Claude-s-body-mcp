@@ -24,6 +24,7 @@
 #include "mic_service.h"
 #include "camera_service.h"
 #include "interaction_service.h"
+#include "tracker_service.h"
 #include "ws_client.h"
 
 void setup() {
@@ -63,12 +64,14 @@ void setup() {
     initPlayback();            // audio queue + downloader
     initWsClient();            // start outbound WS to gateway
     initInteraction();         // head touch + IMU + screen gestures
+    initTracker();             // motion tracking + idle scan
 }
 
 void loop() {
     M5StackChan.update();
     handleWsClient();          // WS state machine + reconnect
     updateInteraction();       // touch/motion/gesture → reactions + events
+    updateTracker();           // motion follow / idle glances
 
     // Cheap-ish but periodic WiFi watchdog. The WS library reconnects when
     // its TCP socket drops, but if WiFi itself goes away we need to nudge it.

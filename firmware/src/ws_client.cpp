@@ -10,6 +10,7 @@
 #include "led_service.h"
 #include "camera_upload.h"
 #include "mic_service.h"
+#include "tracker_service.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -87,6 +88,9 @@ static void handleMove(uint32_t id, JsonObjectConst params) {
     float y = params["y"] | 0.0f;
     int speed = params["speed"] | 50;
     if (!isServoReady()) { sendNack(id, "servo not ready"); return; }
+    // Claude posed the head deliberately — the tracker shouldn't wander off
+    // that pose for a while.
+    trackerHoldOff(30000);
     bool ok = servoMove(x, y, speed);
     Serial.printf("[WS] move x=%.1f y=%.1f speed=%d -> %s\n", x, y, speed, ok ? "ok" : "fail");
     if (ok) sendAckSimple(id);
@@ -95,6 +99,7 @@ static void handleMove(uint32_t id, JsonObjectConst params) {
 
 static void handleGesture(uint32_t id, const String& method) {
     if (!isServoReady()) { sendNack(id, "servo not ready"); return; }
+    trackerHoldOff(method == "home" ? 30000 : 5000);
     bool ok = false;
     if      (method == "nod")   ok = servoNod();
     else if (method == "shake") ok = servoShake();
@@ -217,6 +222,10 @@ static void onMessage(const char* payload, size_t length) {
         // photo_ready event without racing with our upload completion.
         // The actual capture+upload+emit happens after this ack returns.
         sendAckSimple(id, "capturing");
+        // Keep the head still through the capture+upload and drop the
+        // tracker's reference frame (the pose during the photo would
+        // otherwise register as phantom motion afterwards).
+        trackerHoldOff(5000);
         if (!captureUploadAndNotify()) {
             Serial.println("[WS] snapshot capture+upload failed");
         }

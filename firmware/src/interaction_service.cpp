@@ -11,6 +11,7 @@
 #include "led_service.h"
 #include "servo_service.h"
 #include "mic_service.h"
+#include "tracker_service.h"
 #include "ws_client.h"
 #include "globals.h"
 
@@ -166,7 +167,7 @@ static void pollHeadTouch() {
                         lastHeadZone >= 0 ? zones[lastHeadZone] : "unknown");
         reactFace(WHALE_HAPPY);
         reactLeds("#ffb400");   // warm amber
-        if (servoFree()) servoNod();
+        if (servoFree()) { trackerHoldOff(5000); servoNod(); }
         return;
     }
 }
@@ -210,7 +211,7 @@ static void pollScreenTouch() {
         emitInteraction("screen_double_tap");
         reactFace(WHALE_HAPPY);
         reactLeds("green");
-        if (servoFree()) servoNod();
+        if (servoFree()) { trackerHoldOff(5000); servoNod(); }
         return;
     }
 }
