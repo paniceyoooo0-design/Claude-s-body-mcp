@@ -16,6 +16,7 @@
 #include "config.h"
 #include "types.h"
 #include "face_service.h"
+#include "led_service.h"
 #include "ws_client.h"
 
 enum MicState {
@@ -58,6 +59,8 @@ static bool    pre_buf_full  = false;
 // machine doesn't even run, freeing the TLS stack for WS + camera.
 static bool     mic_armed = false;
 static uint32_t arm_deadline_ms = 0;
+static uint32_t arm_duration_ms = 0;
+static bool     speech_seen = false;   // window 内出现过说话级别的音量
 
 static void disarmMic() {
     mic_armed = false;
@@ -66,14 +69,24 @@ static void disarmMic() {
     pre_buf_full  = false;
     silence_start_ms = 0;
     trigger_start_ms = 0;
+    clearLeds();   // 聆听灯灭 = 没在听
 }
 
 void armMicrophone(uint32_t duration_ms) {
     mic_armed = true;
+    arm_duration_ms = duration_ms;
     arm_deadline_ms = millis() + duration_ms;
-    mic_state = MIC_IDLE;
-    Serial.printf("[MIC] armed for %u ms\n", (unsigned)duration_ms);
+    // 2026-07-13: record the WHOLE armed window instead of VAD-gating the
+    // start. Wind/fans kept tripping the old trigger and Panice's actual
+    // words fell outside the captured clip; Scribe pulls speech out of
+    // ambient noise fine, so just hand it everything the window hears.
+    recorded_samples = 0;
+    silence_start_ms = 0;
+    speech_seen = false;
+    mic_state = MIC_RECORDING;
     setFaceExpression(FACE_LISTENING);
+    setLedsAll("#00b4d2");   // 聆听指示：青色灯环 =「现在可以说」（Panice 点名要的）
+    Serial.printf("[MIC] armed %u ms (full-window capture)\n", (unsigned)duration_ms);
 }
 
 bool isMicArmed() {
@@ -244,21 +257,49 @@ bool initMicrophone() {
     return true;
 }
 
+// Finish a capture: upload if it holds real audio, then disarm.
+static void finalizeAndSend(const char* reason) {
+    mic_state = MIC_SENDING;
+    Serial.printf("[MIC] end samples=%u reason=%s\n", (unsigned)recorded_samples, reason);
+    setFaceExpression(FACE_THINKING);
+    if (isValidAudio(record_buffer, recorded_samples)) {
+        size_t wav_size = 0;
+        uint8_t* wav = buildWav(record_buffer, recorded_samples, wav_size);
+        if (wav) {
+            bool ok = uploadAndNotify(wav, wav_size);
+            free(wav);
+            Serial.printf("[MIC] upload %s\n", ok ? "ok" : "fail");
+        }
+    }
+    setFaceExpression(FACE_IDLE);
+    disarmMic();
+}
+
 void updateMicrophone() {
     if (!M5.Mic.isEnabled()) return;
-    if (isPlaying) return;
+    if (isPlaying) {
+        // Armed while the speaker is still talking (I2S is shared, mic can't
+        // run yet): keep sliding the window so it starts fresh after playback
+        // instead of expiring uselessly mid-speech.
+        if (mic_armed) arm_deadline_ms = millis() + arm_duration_ms;
+        return;
+    }
 
     // The big change vs v2.2: only do anything when armed. Outside an armed
     // window we don't even read mic frames — the TLS stack gets a break and
     // ambient noise never triggers stray uploads.
     if (!mic_armed) return;
 
-    // Window expired without a trigger fully completing? Disarm cleanly so
-    // we don't sit in TRIGGERING / RECORDING after the LLM gave up waiting.
+    // Window over: if we were recording and got real length, send what we
+    // have (full-window mode records from the start); else disarm quietly.
     if ((int32_t)(millis() - arm_deadline_ms) >= 0 && mic_state != MIC_SENDING) {
-        Serial.println("[MIC] window expired with no capture");
-        setFaceExpression(FACE_IDLE);
-        disarmMic();
+        if (mic_state == MIC_RECORDING && recorded_samples > MIC_SAMPLE_RATE / 2) {
+            finalizeAndSend("window");
+        } else {
+            Serial.println("[MIC] window expired with no capture");
+            setFaceExpression(FACE_IDLE);
+            disarmMic();
+        }
         return;
     }
 
@@ -320,34 +361,22 @@ void updateMicrophone() {
             recorded_samples += to_copy;
 
             bool maxed = (recorded_samples >= max_samples);
+            if (rms > MIC_TRIGGER_RMS) speech_seen = true;
             if (rms < MIC_SILENCE_RMS) {
                 if (silence_start_ms == 0) silence_start_ms = now;
             } else {
                 silence_start_ms = 0;
             }
-            bool silent_end = (silence_start_ms != 0 &&
+            // Early cut on silence ONLY after we heard speech-level audio —
+            // full-window mode starts recording immediately, so a quiet room
+            // would otherwise "silence-end" before she even opened her mouth.
+            bool silent_end = (speech_seen && silence_start_ms != 0 &&
                                (now - silence_start_ms) >= MIC_SILENCE_HOLD_MS);
 
             if (maxed || silent_end) {
-                mic_state = MIC_SENDING;
-                Serial.printf("[MIC] end samples=%u reason=%s\n",
-                              (unsigned)recorded_samples, maxed ? "max" : "silence");
-                setFaceExpression(FACE_THINKING);
-
-                if (isValidAudio(record_buffer, recorded_samples)) {
-                    size_t wav_size = 0;
-                    uint8_t* wav = buildWav(record_buffer, recorded_samples, wav_size);
-                    if (wav) {
-                        bool ok = uploadAndNotify(wav, wav_size);
-                        free(wav);
-                        Serial.printf("[MIC] upload %s\n", ok ? "ok" : "fail");
-                    }
-                }
-                setFaceExpression(FACE_IDLE);
-                // After upload (or invalid-audio drop), disarm. One listen
-                // window = one capture max. LLM calls listen again to arm
-                // for another.
-                disarmMic();
+                // One listen window = one capture max; LLM calls listen
+                // again to arm another.
+                finalizeAndSend(maxed ? "max" : "silence");
             }
             break;
         }
