@@ -261,6 +261,8 @@ bool initMicrophone() {
 static void finalizeAndSend(const char* reason) {
     mic_state = MIC_SENDING;
     Serial.printf("[MIC] end samples=%u reason=%s\n", (unsigned)recorded_samples, reason);
+    // 灯先灭（"耳朵收起来了"），上传那几秒归思考表情管——灯亮=在听要绝对准时
+    clearLeds();
     setFaceExpression(FACE_THINKING);
     if (isValidAudio(record_buffer, recorded_samples)) {
         size_t wav_size = 0;
