@@ -244,8 +244,11 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
         logger.info("listen RPC didn't ack (%s) — proceeding to wait for upload", e)
 
     # Device will upload via POST /upload/audio, then emit `audio_ready` with
-    # the path it learned from the upload response. Generous timeout: record
-    # duration + 5s for upload + processing.
+    # the path it learned from the upload response. Patience budget: the
+    # device may still be PLAYING TTS when the listen RPC lands (2026-07-13
+    # firmware slides the armed window until playback ends — that's what
+    # makes "arm immediately, record exactly when speech ends" work), so
+    # allow for remaining playback + the record window + upload + STT.
     #
     # Fallback: ESP32 sometimes drops its WS right after a big HTTPS upload
     # (TLS contention) — the audio_ready event gets lost on the wire. If the
@@ -255,7 +258,7 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
     listen_started = time.time()
     full: Path | None = None
     try:
-        event = await _await_event("audio_ready", timeout=duration_ms / 1000.0 + 10)
+        event = await _await_event("audio_ready", timeout=duration_ms / 1000.0 + 30)
         rel_path = event.get("path", "")
         candidate = (CAPTURE_DIR / os.path.basename(rel_path)).resolve()
         if (str(candidate).startswith(str(CAPTURE_DIR.resolve())) and candidate.exists()):
@@ -270,7 +273,7 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
             if p.stat().st_mtime >= listen_started - 0.5
         ]
         if not candidates:
-            return _err(f"no recording uploaded within {duration_ms / 1000.0 + 10}s "
+            return _err(f"no recording uploaded within {duration_ms / 1000.0 + 30}s "
                         "(device may have stayed silent, or upload failed)")
         full = max(candidates, key=lambda p: p.stat().st_mtime)
         logger.info("listen fallback: picked %s", full)
