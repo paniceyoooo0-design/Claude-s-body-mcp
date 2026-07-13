@@ -195,13 +195,18 @@ static bool isValidAudio(const int16_t* audio_data, size_t sample_count) {
         Serial.printf("[MIC] too short (%u), discarding\n", (unsigned)sample_count);
         return false;
     }
-    size_t check_samples = MIC_SAMPLE_RATE / 2;
-    if (sample_count > check_samples) {
-        float early_rms = calcRmsNorm(audio_data, check_samples);
-        if (early_rms < MIC_VOICE_CONFIRM_RMS) {
-            Serial.printf("[MIC] no voice (early RMS=%.3f), discarding\n", early_rms);
-            return false;
-        }
+    // Full-window capture: speech can sit ANYWHERE in the clip (she often
+    // starts talking seconds into the window), so hunt for the loudest
+    // 250ms block instead of sniffing only the first half-second.
+    size_t block = MIC_SAMPLE_RATE / 4;
+    float best_rms = 0.0f;
+    for (size_t off = 0; off + block <= sample_count; off += block) {
+        float r = calcRmsNorm(audio_data + off, block);
+        if (r > best_rms) best_rms = r;
+    }
+    if (best_rms < MIC_VOICE_CONFIRM_RMS) {
+        Serial.printf("[MIC] no voice (best RMS=%.3f), discarding\n", best_rms);
+        return false;
     }
     return true;
 }
@@ -362,23 +367,16 @@ void updateMicrophone() {
             memcpy(record_buffer + recorded_samples, frame, to_copy * sizeof(int16_t));
             recorded_samples += to_copy;
 
-            bool maxed = (recorded_samples >= max_samples);
-            if (rms > MIC_TRIGGER_RMS) speech_seen = true;
-            if (rms < MIC_SILENCE_RMS) {
-                if (silence_start_ms == 0) silence_start_ms = now;
-            } else {
-                silence_start_ms = 0;
-            }
-            // Early cut on silence ONLY after we heard speech-level audio —
-            // full-window mode starts recording immediately, so a quiet room
-            // would otherwise "silence-end" before she even opened her mouth.
-            bool silent_end = (speech_seen && silence_start_ms != 0 &&
-                               (now - silence_start_ms) >= MIC_SILENCE_HOLD_MS);
-
-            if (maxed || silent_end) {
+            // No early silence-cut. Waveform autopsy (2026-07-13): a ~1.5kHz
+            // ambient whine tripped speech_seen, the silence logic then cut
+            // the capture EXACTLY as Panice started talking — her onset is
+            // visible in the clip's last 0.75s. The light says "listening",
+            // so listen: record until the buffer maxes or the window ends.
+            (void)rms;
+            if (recorded_samples >= max_samples) {
                 // One listen window = one capture max; LLM calls listen
                 // again to arm another.
-                finalizeAndSend(maxed ? "max" : "silence");
+                finalizeAndSend("max");
             }
             break;
         }
