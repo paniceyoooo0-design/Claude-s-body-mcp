@@ -258,7 +258,7 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
     listen_started = time.time()
     full: Path | None = None
     try:
-        event = await _await_event("audio_ready", timeout=duration_ms / 1000.0 + 30)
+        event = await _await_event("audio_ready", timeout=duration_ms / 1000.0 + 45)
         rel_path = event.get("path", "")
         candidate = (CAPTURE_DIR / os.path.basename(rel_path)).resolve()
         if (str(candidate).startswith(str(CAPTURE_DIR.resolve())) and candidate.exists()):
@@ -273,7 +273,7 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
             if p.stat().st_mtime >= listen_started - 0.5
         ]
         if not candidates:
-            return _err(f"no recording uploaded within {duration_ms / 1000.0 + 30}s "
+            return _err(f"no recording uploaded within {duration_ms / 1000.0 + 45}s "
                         "(device may have stayed silent, or upload failed)")
         full = max(candidates, key=lambda p: p.stat().st_mtime)
         logger.info("listen fallback: picked %s", full)
