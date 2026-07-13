@@ -119,6 +119,10 @@ static bool uploadAndNotify(const uint8_t* wav, size_t wav_size) {
         Serial.println("[MIC] http.begin failed");
         return false;
     }
+    // A full 8s clip is ~256KB; over ESP32 TLS that's well past HTTPClient's
+    // 5s default timeout — the client aborted mid-body and the gateway saw
+    // "Connection lost" (2026-07-13, killed the first table conversations).
+    http.setTimeout(30000);
     http.addHeader("Authorization", String("Bearer ") + STACKCHAN_TOKEN);
 
     // Multipart form-data with one field `file`. We hand-craft the body so

@@ -45,6 +45,7 @@ bool captureUploadAndNotify() {
         free(jpg);
         return false;
     }
+    http.setTimeout(30000);   // same slow-TLS-upload guard as mic_service
     http.addHeader("Authorization", String("Bearer ") + STACKCHAN_TOKEN);
 
     const char* boundary = "----stackchanbound9f8e7d6c5b4a3210";

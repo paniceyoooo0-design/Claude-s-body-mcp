@@ -76,7 +76,11 @@ static const float    MIN_MOVE_DEG     = 1.5f;
 
 // ── State ────────────────────────────────────────────────────────────────
 static bool     enabled = false;
-static AutonomyMode autonomyMode = AUTONOMY_AWARE;
+// Boot default STILL (2026-07-13, Panice): the body is Claude's resident
+// eyes/mouth, not a pet — it shouldn't watch her by default. Frame-diff
+// keeps running silently in STILL so presence events (welcome-home) still
+// flow; head motion is opt-in via stackchan_autonomy.
+static AutonomyMode autonomyMode = AUTONOMY_STILL;
 static uint32_t holdOffUntil = 0;
 static uint32_t nextTrackMs = 0;
 static uint32_t nextIdleScanMs = 0;
