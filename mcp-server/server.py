@@ -17,15 +17,17 @@ Why this design vs migratorywhale's original HTTP-server-on-device:
 
 See [[project_stackchan_mcp]] memory for full direction history.
 
-Tools (15 total)
+Tools (16 total)
 ----------------
 migratorywhale-inspired (9):
     stackchan_say / listen / see / face / move / nod / shake / home / status
 LED set (4, from old body-mcp because migratorywhale didn't expose LEDs):
     stackchan_set_led / set_all_leds / set_leds / clear_leds
-interaction (2, HtSz-inspired physical interactions + autonomy dial):
+interaction (3, HtSz-inspired physical interactions + mode dials):
     stackchan_events — head touch/pet/swipe, shake/lift, screen gestures
     stackchan_autonomy — still / aware / lively self-motion modes
+    stackchan_mode — home / quiet / out life modes (touch→conversation gate,
+    voice+mic manners in public)
 
 TTS+STT both go through ElevenLabs (Panice designed a voice; voice_id is in
 gateway/.env). Lip-sync is on-device: firmware reads audio amplitude in real
@@ -40,6 +42,7 @@ import logging
 import os
 import sys
 import threading
+import json
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -78,6 +81,31 @@ WAKE_WORTHY_KINDS = {
     "head_touch", "head_pet", "head_swipe", "shake", "lift",
     "screen_double_tap", "screen_long_press",
 }
+
+# ── Body mode (Panice's 在家/安静/外出 design, 2026-07-13) ───────────────────
+# home  — full life: touches start conversations, voice, everything.
+# quiet — she just wants to rua: instant reactions + event log, but touches
+#         don't start conversations. Claude can still speak deliberately.
+# out   — silent travel companion: reactions + Claude's eyes (see) only.
+#         No speaking aloud, no mic — public-space manners.
+# Persisted next to captures so it survives container rebuilds.
+BODY_MODE_FILE = Path(os.environ.get("BODY_MODE_FILE",
+                                     str(Path.home() / ".stackchan" / "body_mode.json")))
+_VALID_MODES = ("home", "quiet", "out")
+
+
+def get_body_mode() -> str:
+    try:
+        mode = json.loads(BODY_MODE_FILE.read_text()).get("mode", "home")
+        return mode if mode in _VALID_MODES else "home"
+    except Exception:
+        return "home"
+
+
+def set_body_mode(mode: str) -> None:
+    BODY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    BODY_MODE_FILE.write_text(json.dumps({"mode": mode, "at": time.time()}))
+
 
 # ── Singletons (one device, one link) ───────────────────────────────────────
 link = DeviceLink()
@@ -134,6 +162,12 @@ async def _forward_events_to_house() -> None:
                     continue
                 kind = msg.get("kind", "")
                 if kind not in WAKE_WORTHY_KINDS:
+                    continue
+                # quiet/out: touches stay local (reactions + event log), no
+                # conversation gets started. Her "安静摸摸" ask.
+                if get_body_mode() != "home":
+                    logger.info("body mode %s — touch %s logged, not forwarded",
+                                get_body_mode(), kind)
                     continue
                 payload = {"kind": kind}
                 if msg.get("detail"):
@@ -205,6 +239,8 @@ async def stackchan_say(text: str, lang: str = "zh") -> str:
     text: what to say (any length up to ElevenLabs limits ~5000 chars)
     lang: 'zh' / 'en' / 'ja' — hint only; ElevenLabs auto-detects.
     """
+    if get_body_mode() == "out":
+        return _err("外出模式：不在公共场合出声（stackchan_mode('home') 可切回）")
     try:
         wav_path = synthesize(text, lang)
     except TTSError as e:
@@ -231,6 +267,8 @@ async def stackchan_listen(duration_ms: int = LISTEN_DEFAULT_MS, lang: str = "zh
     device emits 'audio_ready' event with the saved filename → gateway
     runs ElevenLabs Scribe → returns transcript.
     """
+    if get_body_mode() == "out":
+        return _err("外出模式：不在公共场合开麦（stackchan_mode('home') 可切回）")
     duration_ms = max(500, min(30000, duration_ms))  # clamp to sane range
     # The listen RPC is best-effort. Device may be mid-upload (HTTPS POST
     # blocks the WS event loop on ESP32) and not ack in time — that's OK,
@@ -515,7 +553,27 @@ async def stackchan_status() -> str:
         info = await link.request("status")
     except (DeviceOffline, DeviceError) as e:
         return _err(str(e))
-    return f"✅ Online | {info}"
+    return f"✅ Online | mode={get_body_mode()} | {info}"
+
+
+@mcp.tool()
+async def stackchan_mode(mode: str = "home") -> str:
+    """Switch the body's life mode (Panice's 在家/安静/外出 design).
+
+    mode:
+      'home'  — full life: touches start table conversations, voice on
+      'quiet' — she just wants to pet quietly: instant reactions + event log,
+                touches don't start conversations; deliberate say still works
+      'out'   — silent travel companion: touch reactions + see only;
+                no speaking aloud, no mic (public-space manners)
+    """
+    if mode not in _VALID_MODES:
+        return _err(f"unknown mode {mode!r} — use home / quiet / out")
+    set_body_mode(mode)
+    label = {"home": "🏠 在家 — 全功能",
+             "quiet": "🤫 安静 — 摸摸只记不搭话",
+             "out": "🎒 外出 — 只看不出声不开麦"}[mode]
+    return f"Body mode: {label}"
 
 
 @mcp.tool()
